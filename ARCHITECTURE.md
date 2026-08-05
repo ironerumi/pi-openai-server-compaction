@@ -206,7 +206,7 @@ So the package is intentionally hybrid:
 
 - `npm run smoke`
 
-Verifies imports/loadability plus offline regression checks over exported pure helpers (state clearing, activation-notice dedupe, compaction outcome resolution, WebSocket header merge/rotation).
+Verifies imports/loadability plus offline regression checks over exported pure helpers (state clearing, compaction outcome resolution, WebSocket header merge/rotation) and over extension event wiring (the compaction progress status/success-notification lifecycle registered on `session_before_compact` and `session_compact`).
 
 ### Live end-to-end test
 
