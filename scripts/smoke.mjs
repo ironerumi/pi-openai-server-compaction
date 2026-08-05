@@ -109,6 +109,8 @@ const {
 } = await import(pathToFileURL(join(repoRoot, "src", "remote-compaction.ts")).href);
 const {
   selectInputItemsForContinuation,
+  buildEffectiveWsHeaders,
+  computeWsHeaderSnapshot,
 } = await import(pathToFileURL(join(repoRoot, "src", "openai-ws-stream.ts")).href);
 const { getResponsesRequestShapeState, setResponsesRequestShapeState } = await import(
   pathToFileURL(join(repoRoot, "src", "state.ts")).href
@@ -319,6 +321,69 @@ const websocketHeaders = buildCodexWebSocketHeaders("session-123");
 assert.equal(websocketHeaders["x-client-request-id"], "session-123");
 assert.equal(websocketHeaders.session_id, "session-123");
 assert.equal(websocketHeaders["x-codex-window-id"], "session-123:0");
+
+// Custom, organization, project, and model-registry headers must reach the
+// WebSocket handshake alongside the extension's required Codex headers.
+const wsEffectiveHeaders = buildEffectiveWsHeaders({
+  sessionId: "session-123",
+  modelHeaders: { "openai-organization": "org-registry" },
+  managerHeaders: { "openai-beta-extra": "manager-default" },
+  requestHeaders: {
+    "openai-organization": "org-override",
+    "openai-project": "proj-456",
+    "x-custom-header": "custom-value",
+  },
+});
+assert.equal(wsEffectiveHeaders["openai-organization"], "org-override");
+assert.equal(wsEffectiveHeaders["openai-project"], "proj-456");
+assert.equal(wsEffectiveHeaders["x-custom-header"], "custom-value");
+assert.equal(wsEffectiveHeaders["openai-beta-extra"], "manager-default");
+// Required built-in headers stay correct even when a custom header tries to
+// clobber the same key.
+assert.equal(wsEffectiveHeaders["x-client-request-id"], "session-123");
+assert.equal(wsEffectiveHeaders.session_id, "session-123");
+assert.equal(wsEffectiveHeaders["x-codex-window-id"], "session-123:0");
+assert.match(wsEffectiveHeaders["x-codex-installation-id"], /^[0-9a-f-]{36}$/);
+
+const wsHeadersWithHijackAttempt = buildEffectiveWsHeaders({
+  sessionId: "session-123",
+  requestHeaders: { session_id: "attacker-session", "x-client-request-id": "attacker-session" },
+});
+assert.equal(wsHeadersWithHijackAttempt.session_id, "session-123");
+assert.equal(wsHeadersWithHijackAttempt["x-client-request-id"], "session-123");
+
+// A null request header suppresses a same-named default instead of sending
+// the literal string "null" over the wire.
+const wsHeadersWithSuppression = buildEffectiveWsHeaders({
+  sessionId: "session-123",
+  managerHeaders: { "x-drop-me": "should-be-suppressed" },
+  requestHeaders: { "x-drop-me": null },
+});
+assert.equal("x-drop-me" in wsHeadersWithSuppression, false);
+
+// A changed effective header snapshot must not resolve to the same value as
+// the prior snapshot, so a cached WebSocket session gets rotated rather than
+// reused with stale/leaked headers.
+const snapshotBefore = computeWsHeaderSnapshot(
+  buildEffectiveWsHeaders({ sessionId: "session-123", requestHeaders: { "x-org": "org-a" } }),
+);
+const snapshotAfterOrgChange = computeWsHeaderSnapshot(
+  buildEffectiveWsHeaders({ sessionId: "session-123", requestHeaders: { "x-org": "org-b" } }),
+);
+assert.notEqual(snapshotBefore, snapshotAfterOrgChange);
+const snapshotSameHeadersDifferentOrder = computeWsHeaderSnapshot(
+  buildEffectiveWsHeaders({
+    sessionId: "session-123",
+    requestHeaders: { "x-b": "2", "x-a": "1" },
+  }),
+);
+const snapshotSameHeadersInsertedInOrder = computeWsHeaderSnapshot(
+  buildEffectiveWsHeaders({
+    sessionId: "session-123",
+    requestHeaders: { "x-a": "1", "x-b": "2" },
+  }),
+);
+assert.equal(snapshotSameHeadersDifferentOrder, snapshotSameHeadersInsertedInOrder);
 
 const detailsRoundTrip = extractRemoteCompactionDetails({
   remoteCompaction: buildRemoteCompactionDetails(
