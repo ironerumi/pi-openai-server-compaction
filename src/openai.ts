@@ -7,6 +7,7 @@
 import type { ExtensionConfig, JsonRecord } from "./config.ts";
 import type { ResponsesReasoningConfig, ResponsesTextConfig } from "./remote-compaction.ts";
 import { isRecord, toPositiveInteger } from "./config.ts";
+import { clampThinkingLevel, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 export type ModelLike = {
   api?: unknown;
@@ -141,15 +142,27 @@ export function applyPayloadPatch(params: {
   return nextPayload;
 }
 
+const THINKING_LEVELS: ReadonlySet<string> = new Set([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
 export function thinkingLevelToResponsesReasoning(
+  model: Model<any>,
   thinkingLevel: unknown,
 ): ResponsesReasoningConfig | undefined {
-  if (thinkingLevel === "minimal") return { effort: "minimal", summary: "auto" };
-  if (thinkingLevel === "low") return { effort: "low", summary: "auto" };
-  if (thinkingLevel === "medium") return { effort: "medium", summary: "auto" };
-  if (thinkingLevel === "high") return { effort: "high", summary: "auto" };
-  if (thinkingLevel === "xhigh") return { effort: "xhigh", summary: "auto" };
-  return undefined;
+  if (!model.reasoning || typeof thinkingLevel !== "string" || !THINKING_LEVELS.has(thinkingLevel)) {
+    return undefined;
+  }
+  const clamped = clampThinkingLevel(model, thinkingLevel as ModelThinkingLevel);
+  if (clamped === "off") return undefined;
+  const mapped = model.thinkingLevelMap?.[clamped];
+  if (mapped === null) return undefined;
+  return { effort: (mapped ?? clamped) as ResponsesReasoningConfig["effort"], summary: "auto" };
 }
 
 export function applyRemoteHistoryPayloadPatch(params: {

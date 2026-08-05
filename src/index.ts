@@ -220,9 +220,10 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
       : messagesToResponseItems(fullBranchMessages);
     const promptResponseItems = normalizeResponseItemsForPrompt(responseItems, model);
     const thinkingLevel = pi.getThinkingLevel();
-    const fallbackReasoning = model.reasoning
-      ? thinkingLevelToResponsesReasoning(thinkingLevel ?? getBranchThinkingLevel(branchEntries))
-      : undefined;
+    const fallbackReasoning = thinkingLevelToResponsesReasoning(
+      model,
+      thinkingLevel ?? getBranchThinkingLevel(branchEntries),
+    );
     const reasoning = observedRequestShape?.reasoning ?? fallbackReasoning;
     const text = observedRequestShape?.text;
 

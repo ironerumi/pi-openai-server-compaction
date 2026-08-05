@@ -48,6 +48,7 @@ import {
 import {
   buildCodexWebSocketHeaders,
   normalizeResponseItemsForPrompt,
+  type ResponsesReasoningConfig,
 } from "./remote-compaction.ts";
 import {
   getContinuationState,
@@ -124,14 +125,15 @@ function extractCacheWriteTokens(response: ResponseObject): number {
     : 0;
 }
 
-function resolveResponsesReasoning(
+export function resolveResponsesReasoning(
   model: Model<any>,
   options: WsOptions | undefined,
-): { effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"; summary?: "auto" | "concise" | "detailed" | null } | undefined {
+): ResponsesReasoningConfig | undefined {
   if (!model.reasoning) return undefined;
-  const configured = thinkingLevelToResponsesReasoning(options?.reasoning);
+  const configured = thinkingLevelToResponsesReasoning(model, options?.reasoning);
   if (!configured) {
-    return model.provider !== "github-copilot" ? { effort: "none" } : undefined;
+    if (model.provider === "github-copilot" || model.thinkingLevelMap?.off === null) return undefined;
+    return { effort: (model.thinkingLevelMap?.off ?? "none") as ResponsesReasoningConfig["effort"] };
   }
   return {
     effort: configured.effort,

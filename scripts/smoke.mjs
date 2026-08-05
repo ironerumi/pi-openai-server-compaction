@@ -111,10 +111,14 @@ const {
   selectInputItemsForContinuation,
   buildEffectiveWsHeaders,
   computeWsHeaderSnapshot,
+  resolveResponsesReasoning,
 } = await import(pathToFileURL(join(repoRoot, "src", "openai-ws-stream.ts")).href);
 const { getResponsesRequestShapeState, setResponsesRequestShapeState } = await import(
   pathToFileURL(join(repoRoot, "src", "state.ts")).href
 );
+const {
+  thinkingLevelToResponsesReasoning,
+} = await import(pathToFileURL(join(repoRoot, "src", "openai.ts")).href);
 
 const targetModelKey = "openai:openai-responses:gpt-5.4-nano";
 const reconstructed = reconstructRemoteCompactionStateFromBranch({
@@ -469,6 +473,80 @@ assert.equal(
   getResponsesRequestShapeState(modelSwitchSessionId),
   undefined,
   "model switch must clear cached request shape so an immediate compaction cannot reuse the previous model's reasoning/text config",
+);
+
+// "max" thinking level: a model that only maps it to an existing effort tier still gets that tier.
+const maxToXhighModel = {
+  reasoning: true,
+  provider: "openai",
+  thinkingLevelMap: { off: "none", low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
+};
+assert.deepEqual(
+  thinkingLevelToResponsesReasoning(maxToXhighModel, "max"),
+  { effort: "xhigh", summary: "auto" },
+  "max should clamp down to the model's highest mapped tier, not disappear",
+);
+
+// "max" thinking level: a model with a native max tier passes it through untouched.
+const nativeMaxModel = {
+  reasoning: true,
+  provider: "openai",
+  thinkingLevelMap: { off: "none", high: "high", xhigh: "xhigh", max: "max" },
+};
+assert.deepEqual(
+  thinkingLevelToResponsesReasoning(nativeMaxModel, "max"),
+  { effort: "max", summary: "auto" },
+  "max should pass through for models that natively support it",
+);
+
+// Clamping also applies to "xhigh" for models that don't support it.
+const noXhighModel = {
+  reasoning: true,
+  provider: "openai",
+  thinkingLevelMap: { off: "none", minimal: "minimal", low: "low", medium: "medium", high: "high" },
+};
+assert.deepEqual(
+  thinkingLevelToResponsesReasoning(noXhighModel, "xhigh"),
+  { effort: "high", summary: "auto" },
+  "xhigh should clamp down to high when a model has no xhigh mapping",
+);
+
+// The default WebSocket path must not degrade an unmapped "max" request to "none".
+assert.deepEqual(
+  resolveResponsesReasoning(maxToXhighModel, { reasoning: "max" }),
+  { effort: "xhigh", summary: "auto" },
+  "WebSocket path should clamp max instead of dropping it to none",
+);
+
+// Model-specific "off" mapping: an explicit off effort is sent when reasoning is unset.
+assert.deepEqual(
+  resolveResponsesReasoning(maxToXhighModel, {}),
+  { effort: "none" },
+  "unset reasoning should use the model's mapped off effort",
+);
+
+// Model-specific "off" mapping: off: null means no reasoning field is sent at all.
+const noOffFieldModel = {
+  reasoning: true,
+  provider: "some-other-provider",
+  thinkingLevelMap: { off: null, high: "high" },
+};
+assert.equal(
+  resolveResponsesReasoning(noOffFieldModel, {}),
+  undefined,
+  "off: null should omit the reasoning field entirely",
+);
+
+// Existing GitHub Copilot behavior: never send a reasoning field when unset, regardless of off mapping.
+const copilotModel = {
+  reasoning: true,
+  provider: "github-copilot",
+  thinkingLevelMap: { off: "none", high: "high" },
+};
+assert.equal(
+  resolveResponsesReasoning(copilotModel, {}),
+  undefined,
+  "GitHub Copilot should never receive an explicit off reasoning field",
 );
 
 console.log("smoke ok");
