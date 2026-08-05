@@ -587,20 +587,29 @@ assert.equal(
   };
 
   const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  const originalEnabledEnv = process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
   try {
     process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
-    testHandlers.before_provider_request(
+    process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = "true";
+    const patched = testHandlers.before_provider_request(
       {
         type: "before_provider_request",
         payload: { model: "gpt-5.4-nano", input: [{ role: "user", content: "hello" }] },
       },
       testCtx,
     );
+    assert.ok(patched, "the request handler must have run its full patch path, not returned early");
+    assert.ok(
+      Array.isArray(patched.context_management),
+      "expected the patched payload that proves the handler reached the end of the request path",
+    );
     assert.equal(notifyCalls.length, 0, "ordinary provider request must not emit a compaction notification");
     assert.equal(statusCalls.length, 0, "ordinary provider request must not set compaction status");
   } finally {
     if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
     else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+    if (originalEnabledEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = originalEnabledEnv;
   }
 }
 
@@ -833,6 +842,109 @@ assert.equal(
   } finally {
     if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
     else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+  }
+}
+
+// --- session_before_compact sets a transient status and clears it on every exit path ---
+{
+  const beforeCompactHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { beforeCompactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
+  });
+
+  const compactionModel = {
+    provider: "openai",
+    api: "openai-responses",
+    id: "gpt-5.4-nano",
+    input: ["text"],
+  };
+
+  const makeCompactCtx = (statusCalls, notifyCalls, overrides = {}) => ({
+    hasUI: true,
+    cwd: repoRoot,
+    ui: {
+      notify: (msg, level) => notifyCalls.push({ msg, level }),
+      setStatus: (key, text) => statusCalls.push({ key, text }),
+    },
+    model: compactionModel,
+    modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test" }) },
+    getSystemPrompt: () => "system prompt",
+    sessionManager: { getSessionId: () => "sess-before-compact", getBranch: () => [] },
+    ...overrides,
+  });
+
+  const compactEvent = {
+    type: "session_before_compact",
+    branchEntries: [],
+    preparation: { firstKeptEntryId: "entry-1", tokensBefore: 1234 },
+    signal: new AbortController().signal,
+  };
+
+  // The local-summary leg is intentionally left to fail; only the remote leg is
+  // stubbed, so the status lifecycle is what these assertions pin down.
+  const remoteCompactionSse =
+    'data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"SMOKE_ENCRYPTED"}}\n\n' +
+    'data: {"type":"response.completed","response":{}}\n\n' +
+    "data: [DONE]\n\n";
+  const isRemoteCompactionRequest = (init) =>
+    typeof init?.body === "string" && init.body.includes("compaction_trigger");
+
+  const originalFetch = globalThis.fetch;
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  const originalEnabledEnv = process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+    process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = "true";
+
+    globalThis.fetch = async (_url, init) => {
+      if (!isRemoteCompactionRequest(init)) throw new Error("smoke: local summary model call is not stubbed");
+      return new Response(remoteCompactionSse, { status: 200 });
+    };
+    const okStatus = [];
+    const okNotify = [];
+    const outcome = await beforeCompactHandlers.session_before_compact(
+      compactEvent,
+      makeCompactCtx(okStatus, okNotify),
+    );
+    assert.ok(outcome?.compaction?.details?.remoteCompaction, "remote compaction should produce remote details");
+    assert.equal(okStatus.length, 2, "status must be set once and cleared once on the success path");
+    assert.equal(okStatus[0].key, okStatus[1].key, "set and clear must use the same status key");
+    assert.match(okStatus[0].text, /remote compaction in progress/i);
+    assert.equal(okStatus[1].text, undefined, "status must be cleared after a successful remote compaction");
+
+    globalThis.fetch = async () => { throw new Error("smoke: remote compaction endpoint unreachable"); };
+    const failStatus = [];
+    const failNotify = [];
+    await beforeCompactHandlers.session_before_compact(compactEvent, makeCompactCtx(failStatus, failNotify));
+    assert.equal(failStatus.length, 2, "status must be set once and cleared once on the failure path");
+    assert.equal(failStatus[0].key, failStatus[1].key);
+    assert.match(failStatus[0].text, /remote compaction in progress/i);
+    assert.equal(failStatus[1].text, undefined, "finally must clear the status when remote compaction throws");
+
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "false";
+    const quietStatus = [];
+    const quietNotify = [];
+    await beforeCompactHandlers.session_before_compact(compactEvent, makeCompactCtx(quietStatus, quietNotify));
+    assert.equal(quietStatus.length, 0, "notify:false must not write a footer status");
+
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+    const headlessStatus = [];
+    const headlessNotify = [];
+    await beforeCompactHandlers.session_before_compact(
+      compactEvent,
+      makeCompactCtx(headlessStatus, headlessNotify, { hasUI: false }),
+    );
+    assert.equal(headlessStatus.length, 0, "absent UI must not write a footer status");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+    if (originalEnabledEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = originalEnabledEnv;
   }
 }
 

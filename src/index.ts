@@ -224,8 +224,7 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
   pi.on("session_tree", syncAfterSessionChange);
 
   pi.on("session_compact", (event, ctx) => {
-    clearLiveContinuation(getSessionId(ctx));
-    syncRemoteState(ctx);
+    syncAfterSessionChange(event, ctx);
 
     if (!event.fromExtension) return;
     const cfg = loadConfig(ctx.cwd);
@@ -254,7 +253,8 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok || !auth.apiKey) return undefined;
 
-    if (cfg.notify && ctx.hasUI) {
+    const showStatus = cfg.notify && ctx.hasUI;
+    if (showStatus) {
       ctx.ui.setStatus(COMPACTION_STATUS_KEY, "OpenAI remote compaction in progress…");
     }
 
@@ -315,7 +315,7 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
         ui: ctx.ui,
       });
     } finally {
-      if (cfg.notify && ctx.hasUI) {
+      if (showStatus) {
         ctx.ui.setStatus(COMPACTION_STATUS_KEY, undefined);
       }
     }
