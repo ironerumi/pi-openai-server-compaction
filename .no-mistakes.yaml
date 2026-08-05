@@ -1,0 +1,7 @@
+# Per-repo no-mistakes overrides.
+
+# `npm test` runs typecheck + smoke with no live external calls (package.json).
+# Pin it as the Test step command so no-mistakes exercises the canonical
+# package command instead of agent-selected tests.
+commands:
+  test: 'npm test'
