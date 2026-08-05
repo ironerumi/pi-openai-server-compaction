@@ -132,6 +132,7 @@ export function resolveResponsesReasoning(
   if (!model.reasoning) return undefined;
   const configured = thinkingLevelToResponsesReasoning(model, options?.reasoning);
   if (!configured) {
+    // GitHub Copilot rejects an explicit off effort; off: null means the model wants no reasoning field.
     if (model.provider === "github-copilot" || model.thinkingLevelMap?.off === null) return undefined;
     return { effort: (model.thinkingLevelMap?.off ?? "none") as ResponsesReasoningConfig["effort"] };
   }

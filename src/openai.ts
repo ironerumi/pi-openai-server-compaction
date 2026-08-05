@@ -151,6 +151,9 @@ const THINKING_LEVELS: ReadonlySet<string> = new Set([
   "max",
 ]);
 
+// Mirrors how Pi AI itself builds reasoning params: clamp against the model, then read its
+// thinkingLevelMap. A static level->effort map silently dropped levels it did not list (`max`
+// degraded to no reasoning at all), and it ignored per-model mappings such as off: null.
 export function thinkingLevelToResponsesReasoning(
   model: Model<any>,
   thinkingLevel: unknown,
