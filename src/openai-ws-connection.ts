@@ -251,9 +251,9 @@ export class OpenAIWebSocketManager extends EventEmitter {
     const WebSocketCtor = (wsModule.default ?? wsModule) as any;
     return new WebSocketCtor(this.wsUrl, {
       headers: {
+        ...this.headers,
         Authorization: `Bearer ${this.apiKey}`,
         "OpenAI-Beta": "responses_websockets=2026-02-06",
-        ...this.headers,
       },
     });
   }

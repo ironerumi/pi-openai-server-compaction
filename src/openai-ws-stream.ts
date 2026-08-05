@@ -585,18 +585,21 @@ export function buildEffectiveWsHeaders(params: {
   modelHeaders?: Record<string, string>;
   managerHeaders?: Record<string, string>;
   requestHeaders?: Record<string, string | null>;
-}): Record<string, string> {
-  const headers: Record<string, string> = {
+}): { headers: Record<string, string>; snapshot: string } {
+  const callerHeaders: Record<string, string> = {
     ...(params.modelHeaders ?? {}),
     ...(params.managerHeaders ?? {}),
   };
   for (const [key, value] of Object.entries(params.requestHeaders ?? {})) {
-    if (value === null) delete headers[key];
-    else headers[key] = value;
+    if (value === null) delete callerHeaders[key];
+    else callerHeaders[key] = value;
   }
   // Required identity/session headers always win so custom headers can never
   // impersonate another session or drop the extension's Codex routing.
-  return { ...headers, ...buildCodexWebSocketHeaders(params.sessionId) };
+  return {
+    headers: { ...callerHeaders, ...buildCodexWebSocketHeaders(params.sessionId) },
+    snapshot: computeWsHeaderSnapshot(callerHeaders),
+  };
 }
 
 export function computeWsHeaderSnapshot(headers: Record<string, string>): string {
@@ -819,13 +822,12 @@ export function createOpenAIWebSocketStreamFn(
         }
 
         const typedOptions = options as WsOptions | undefined;
-        const effectiveHeaders = buildEffectiveWsHeaders({
+        const { headers: effectiveHeaders, snapshot: headerSnapshot } = buildEffectiveWsHeaders({
           sessionId,
           modelHeaders: model.headers,
           managerHeaders: managerOptions?.headers,
           requestHeaders: typedOptions?.headers,
         });
-        const headerSnapshot = computeWsHeaderSnapshot(effectiveHeaders);
 
         let session = wsRegistry.get(sessionId);
         const currentModelKey = modelKey(model);
