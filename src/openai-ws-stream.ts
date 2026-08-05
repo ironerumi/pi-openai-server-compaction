@@ -58,6 +58,7 @@ import {
 type WsSession = {
   manager: OpenAIWebSocketManager;
   modelKey: string;
+  headerSnapshot: string;
   lastContextLength: number;
   lastRequestKey?: string;
   warmUpAttempted: boolean;
@@ -579,6 +580,34 @@ function resolveWsWarmup(options: SimpleStreamOptions | undefined): boolean {
   return warmup === true;
 }
 
+export function buildEffectiveWsHeaders(params: {
+  sessionId: string;
+  modelHeaders?: Record<string, string>;
+  managerHeaders?: Record<string, string>;
+  requestHeaders?: Record<string, string | null>;
+}): { headers: Record<string, string>; snapshot: string } {
+  const callerHeaders: Record<string, string> = {
+    ...(params.modelHeaders ?? {}),
+    ...(params.managerHeaders ?? {}),
+  };
+  for (const [key, value] of Object.entries(params.requestHeaders ?? {})) {
+    if (value === null) delete callerHeaders[key];
+    else callerHeaders[key] = value;
+  }
+  // Required identity/session headers always win so custom headers can never
+  // impersonate another session or drop the extension's Codex routing.
+  return {
+    headers: { ...callerHeaders, ...buildCodexWebSocketHeaders(params.sessionId) },
+    snapshot: computeWsHeaderSnapshot(callerHeaders),
+  };
+}
+
+// Sorted so headers that differ only by insertion order compare equal and do
+// not force a needless socket rebuild.
+export function computeWsHeaderSnapshot(headers: Record<string, string>): string {
+  return JSON.stringify(Object.keys(headers).sort().map((key) => [key, headers[key]]));
+}
+
 function buildWsRequestKey(params: {
   model: Model<any>;
   context: Context;
@@ -794,20 +823,25 @@ export function createOpenAIWebSocketStreamFn(
           return await fallbackToHttpResponses(model, context, options, eventStream);
         }
 
+        const typedOptions = options as WsOptions | undefined;
+        const { headers: effectiveHeaders, snapshot: headerSnapshot } = buildEffectiveWsHeaders({
+          sessionId,
+          modelHeaders: model.headers,
+          managerHeaders: managerOptions?.headers,
+          requestHeaders: typedOptions?.headers,
+        });
+
         let session = wsRegistry.get(sessionId);
         const currentModelKey = modelKey(model);
-        if (session && session.modelKey !== currentModelKey) {
+        if (session && (session.modelKey !== currentModelKey || session.headerSnapshot !== headerSnapshot)) {
           releaseWsSession(sessionId);
           session = undefined;
         }
         if (!session) {
-          const headers = {
-            ...(managerOptions?.headers ?? {}),
-            ...buildCodexWebSocketHeaders(sessionId),
-          };
           session = {
-            manager: new OpenAIWebSocketManager({ ...managerOptions, headers }),
+            manager: new OpenAIWebSocketManager({ ...managerOptions, headers: effectiveHeaders }),
             modelKey: currentModelKey,
+            headerSnapshot,
             lastContextLength: 0,
             lastRequestKey: undefined,
             warmUpAttempted: false,
@@ -858,7 +892,6 @@ export function createOpenAIWebSocketStreamFn(
 
         const remoteCompactionState = getRemoteCompactionState(sessionId);
         const continuationState = getContinuationState(sessionId);
-        const typedOptions = options as WsOptions | undefined;
         const functionTools = convertTools(context.tools);
         const requestKey = buildWsRequestKey({
           model,

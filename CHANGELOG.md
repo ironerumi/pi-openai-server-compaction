@@ -3,6 +3,8 @@
 This changelog intentionally starts at **0.1.0**.
 
 ## Unreleased
+- carry custom, organization, project, and model-registry headers into the OpenAI WebSocket handshake instead of dropping everything except factory-level headers; the extension's required Codex identity/session headers are applied last so a caller header cannot hijack session routing or auth
+- rotate a cached WebSocket session whenever its effective header set changes, not only on a model-key change, so a reused `sessionId` can no longer keep sending stale headers
 - clear the cached Responses request shape on model selection, so compacting immediately after a model switch no longer sends the previous model's `reasoning`/`text` shape to the newly selected model
 - widen the declared Pi peerDependency range to `>=0.80.9 <0.84.0`; unchanged implementation verified against all seven published versions in that range (0.80.9-0.83.0)
 - target Pi 0.80.9 and the `@earendil-works/*` package namespace
