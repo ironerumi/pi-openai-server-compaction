@@ -206,7 +206,7 @@ So the package is intentionally hybrid:
 
 - `npm run smoke`
 
-Verifies imports/loadability plus offline regression checks over the pure helpers.
+Verifies imports/loadability plus offline regression checks over exported pure helpers (state clearing, activation-notice dedupe, compaction outcome resolution, WebSocket header merge/rotation).
 
 ### Live end-to-end test
 

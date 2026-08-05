@@ -91,7 +91,11 @@ for (const packageName of [
   ensureLocalPeerLink(packageName);
 }
 
-const { default: extensionFactory } = await import(pathToFileURL(join(repoRoot, "src", "index.ts")).href);
+const {
+  default: extensionFactory,
+  maybeNotifyRequestFeatures,
+  resolveCompactionOutcome,
+} = await import(pathToFileURL(join(repoRoot, "src", "index.ts")).href);
 assert.equal(typeof extensionFactory, "function", "extension entrypoint should export a function");
 
 const {
@@ -119,6 +123,7 @@ const { getResponsesRequestShapeState, setResponsesRequestShapeState } = await i
 const {
   thinkingLevelToResponsesReasoning,
 } = await import(pathToFileURL(join(repoRoot, "src", "openai.ts")).href);
+const { loadConfig } = await import(pathToFileURL(join(repoRoot, "src", "config.ts")).href);
 
 const targetModelKey = "openai:openai-responses:gpt-5.4-nano";
 const reconstructed = reconstructRemoteCompactionStateFromBranch({
@@ -548,5 +553,148 @@ assert.equal(
   undefined,
   "GitHub Copilot should never receive an explicit off reasoning field",
 );
+
+// --- notification noise fix: activation notice fires once per session+model, not once per feature-shape change ---
+{
+  const notifiedModels = new Set();
+  const calls = [];
+  const ui = { notify: (msg, level) => calls.push({ msg, level }) };
+  const model = { provider: "openai", id: "gpt-5.4-nano" };
+
+  maybeNotifyRequestFeatures({
+    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
+    features: ["store=true", "context_management"],
+  });
+  maybeNotifyRequestFeatures({
+    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
+    features: ["store=true", "context_management", "previous_response_id"],
+  });
+  maybeNotifyRequestFeatures({
+    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
+    features: ["store=true", "context_management", "remote_compaction_history"],
+  });
+  maybeNotifyRequestFeatures({
+    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
+    features: ["store=true", "context_management", "previous_response_id"],
+  });
+  assert.equal(calls.length, 1, "activation notice should fire once per session+model, not once per feature-shape change");
+
+  maybeNotifyRequestFeatures({
+    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-2", model,
+    features: ["store=true", "context_management"],
+  });
+  assert.equal(calls.length, 2, "a distinct session must still receive its own one-time activation notice");
+
+  maybeNotifyRequestFeatures({
+    notifiedModels, hasUI: true, notify: false, ui, sessionId: "sess-3", model,
+    features: ["store=true", "context_management"],
+  });
+  assert.equal(calls.length, 2, "notify:false must still fully suppress the opt-in activation notice");
+}
+
+// --- notify config/env-var plumbing is unchanged ---
+{
+  // The env var must win over any global/project config file regardless of this
+  // machine's ~/.pi/agent/openai-server-compaction.json, so we don't assert a
+  // "no env var" default here — only the override, which is deterministic.
+  const originalEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+    assert.equal(loadConfig(repoRoot).notify, true, "PI_OPENAI_SERVER_COMPACTION_NOTIFY=true should enable notify");
+
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "false";
+    assert.equal(loadConfig(repoRoot).notify, false, "PI_OPENAI_SERVER_COMPACTION_NOTIFY=false should disable notify");
+  } finally {
+    if (originalEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalEnv;
+  }
+}
+
+// --- meaningful compaction outcome reporting is preserved ---
+{
+  const outcomeModel = { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" };
+
+  // Remote fails but the local fallback summary succeeds: falls back silently, exactly as before.
+  {
+    const calls = [];
+    const ui = { notify: (msg, level) => calls.push({ msg, level }) };
+    const localValue = { summary: "local summary", firstKeptEntryId: "entry-1", tokensBefore: 500 };
+    const outcome = resolveCompactionOutcome({
+      model: outcomeModel,
+      preparation: { firstKeptEntryId: "entry-1", tokensBefore: 500 },
+      localResult: { status: "fulfilled", value: localValue },
+      remoteResult: { status: "rejected", reason: new Error("remote down") },
+      aborted: false,
+      hasUI: true,
+      ui,
+    });
+    assert.deepEqual(outcome, { compaction: localValue }, "remote failure with a working local summary should fall back silently");
+    assert.equal(calls.length, 0, "silent single-failure fallback must not notify");
+  }
+
+  // Both remote and local fail: Pi's default compaction takes over and the opt-in outcome warning still fires.
+  {
+    const calls = [];
+    const ui = { notify: (msg, level) => calls.push({ msg, level }) };
+    const outcome = resolveCompactionOutcome({
+      model: outcomeModel,
+      preparation: { firstKeptEntryId: "entry-1", tokensBefore: 500 },
+      localResult: { status: "rejected", reason: new Error("local failed too") },
+      remoteResult: { status: "rejected", reason: new Error("remote down") },
+      aborted: false,
+      hasUI: true,
+      ui,
+    });
+    assert.equal(outcome, undefined, "double failure defers to Pi's default compaction");
+    assert.equal(calls.length, 1, "double failure must still surface a meaningful outcome warning");
+    assert.equal(calls[0].level, "warning");
+    assert.match(calls[0].msg, /remote down/);
+  }
+
+  // An aborted compaction adds no notice, even on double failure.
+  {
+    const calls = [];
+    const ui = { notify: (msg, level) => calls.push({ msg, level }) };
+    const outcome = resolveCompactionOutcome({
+      model: outcomeModel,
+      preparation: { firstKeptEntryId: "entry-1", tokensBefore: 500 },
+      localResult: { status: "rejected", reason: new Error("local failed too") },
+      remoteResult: { status: "rejected", reason: new Error("remote down") },
+      aborted: true,
+      hasUI: true,
+      ui,
+    });
+    assert.equal(outcome, undefined);
+    assert.equal(calls.length, 0, "an aborted compaction must not emit an outcome notice");
+  }
+
+  // Remote succeeds: returns the merged compaction result, and success is not itself a spam notice.
+  {
+    const calls = [];
+    const ui = { notify: (msg, level) => calls.push({ msg, level }) };
+    const localValue = { summary: "local summary", firstKeptEntryId: "entry-1", tokensBefore: 500 };
+    const outcome = resolveCompactionOutcome({
+      model: outcomeModel,
+      preparation: { firstKeptEntryId: "entry-1", tokensBefore: 500 },
+      localResult: { status: "fulfilled", value: localValue },
+      remoteResult: {
+        status: "fulfilled",
+        value: {
+          output: [{ type: "compaction", encrypted_content: "ENCRYPTED" }],
+          usage: {
+            input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        },
+      },
+      aborted: false,
+      hasUI: true,
+      ui,
+    });
+    assert.equal(outcome.compaction.summary, "local summary");
+    assert.ok(outcome.compaction.details.remoteCompaction, "successful remote compaction should attach remoteCompaction details");
+    assert.equal(calls.length, 0, "a successful remote compaction must not also fire an activation-style notice");
+  }
+}
 
 console.log("smoke ok");
