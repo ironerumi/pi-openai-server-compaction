@@ -250,6 +250,8 @@ export class OpenAIWebSocketManager extends EventEmitter {
     const wsModule = await import("ws");
     const WebSocketCtor = (wsModule.default ?? wsModule) as any;
     return new WebSocketCtor(this.wsUrl, {
+      // Auth headers are spread last on purpose: a caller-supplied header must
+      // never be able to replace the credential or the negotiated beta version.
       headers: {
         ...this.headers,
         Authorization: `Bearer ${this.apiKey}`,

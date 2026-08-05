@@ -602,6 +602,8 @@ export function buildEffectiveWsHeaders(params: {
   };
 }
 
+// Sorted so headers that differ only by insertion order compare equal and do
+// not force a needless socket rebuild.
 export function computeWsHeaderSnapshot(headers: Record<string, string>): string {
   return JSON.stringify(Object.keys(headers).sort().map((key) => [key, headers[key]]));
 }
