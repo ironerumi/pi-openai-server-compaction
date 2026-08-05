@@ -143,7 +143,7 @@ export interface ResponseCreateEvent {
   top_p?: number;
   metadata?: Record<string, string>;
   reasoning?: {
-    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
     summary?: "auto" | "concise" | "detailed" | null;
   };
   truncation?: "auto" | "disabled";
