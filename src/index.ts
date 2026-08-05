@@ -191,7 +191,9 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
   pi.on("session_compact", syncAfterSessionChange);
 
   pi.on("model_select", (_event, ctx) => {
-    clearLiveContinuation(getSessionId(ctx));
+    const sessionId = getSessionId(ctx);
+    clearLiveContinuation(sessionId);
+    clearResponsesRequestShapeState(sessionId);
   });
 
   pi.on("session_shutdown", () => {

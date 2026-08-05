@@ -110,6 +110,9 @@ const {
 const {
   selectInputItemsForContinuation,
 } = await import(pathToFileURL(join(repoRoot, "src", "openai-ws-stream.ts")).href);
+const { getResponsesRequestShapeState, setResponsesRequestShapeState } = await import(
+  pathToFileURL(join(repoRoot, "src", "state.ts")).href
+);
 
 const targetModelKey = "openai:openai-responses:gpt-5.4-nano";
 const reconstructed = reconstructRemoteCompactionStateFromBranch({
@@ -369,5 +372,34 @@ assert.deepEqual(incrementalInput, [
     content: "new user",
   },
 ]);
+
+const registeredHandlers = {};
+extensionFactory({
+  registerProvider() {},
+  on(eventName, handler) {
+    registeredHandlers[eventName] = handler;
+  },
+});
+const modelSwitchSessionId = "session-model-switch-test";
+setResponsesRequestShapeState(modelSwitchSessionId, {
+  updatedAt: 1,
+  reasoning: { effort: "high", summary: "auto" },
+  text: { verbosity: "medium" },
+});
+assert.ok(
+  getResponsesRequestShapeState(modelSwitchSessionId),
+  "expected request shape to be cached before model switch",
+);
+registeredHandlers.model_select(undefined, {
+  sessionManager: {
+    getSessionId: () => modelSwitchSessionId,
+    getBranch: () => [],
+  },
+});
+assert.equal(
+  getResponsesRequestShapeState(modelSwitchSessionId),
+  undefined,
+  "model switch must clear cached request shape so an immediate compaction cannot reuse the previous model's reasoning/text config",
+);
 
 console.log("smoke ok");
