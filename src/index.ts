@@ -6,6 +6,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
 import { isRecord, loadConfig } from "./config.ts";
 import { streamOpenAIResponsesWithPhase2B } from "./custom-stream.ts";
 import {
@@ -143,22 +144,77 @@ function extendRemoteHistoryIfCompatible(params: {
   });
 }
 
-function maybeNotifyRequestFeatures(params: {
+export function maybeNotifyRequestFeatures(params: {
   notifiedModels: Set<string>;
   hasUI: boolean;
   notify: boolean;
   ui: { notify(message: string, level: "info" | "warning"): void };
+  sessionId: string;
   model: TargetModel;
   features: string[];
 }): void {
   if (!params.notify || !params.hasUI || params.features.length === 0) return;
 
   const key = `${String(params.model.provider)}/${String(params.model.id)}`;
-  const noticeKey = `${key}:${params.features.join(",")}`;
+  // Dedupe per session+model, not per exact feature combination: the feature set
+  // naturally evolves within a session (continuation gained, remote compaction
+  // toggled by success/failure) and re-keying on it produced a fresh, misleading
+  // "active" notice on every shape change instead of once per session.
+  const noticeKey = `${params.sessionId}:${key}`;
   if (params.notifiedModels.has(noticeKey)) return;
 
   params.notifiedModels.add(noticeKey);
   params.ui.notify(`OpenAI compaction active for ${key} (${params.features.join(", ")})`, "info");
+}
+
+export function resolveCompactionOutcome(params: {
+  model: Model<any>;
+  preparation: { firstKeptEntryId: string; tokensBefore: number };
+  localResult: PromiseSettledResult<Awaited<ReturnType<typeof generateBestEffortLocalSummary>>>;
+  remoteResult: PromiseSettledResult<Awaited<ReturnType<typeof callRemoteCompactionEndpoint>>>;
+  aborted: boolean;
+  hasUI: boolean;
+  ui: { notify(message: string, level: "info" | "warning"): void };
+}) {
+  if (params.remoteResult.status !== "fulfilled") {
+    if (params.localResult.status === "fulfilled") {
+      return { compaction: params.localResult.value };
+    }
+    if (!params.aborted && params.hasUI) {
+      const message =
+        params.remoteResult.reason instanceof Error
+          ? params.remoteResult.reason.message
+          : String(params.remoteResult.reason);
+      params.ui.notify(`OpenAI remote compaction failed; falling back to default compaction. ${message}`, "warning");
+    }
+    return undefined;
+  }
+
+  const remoteDetails = buildRemoteCompactionDetails(
+    params.model,
+    params.remoteResult.value.output,
+    params.remoteResult.value.usage,
+  );
+  const localSummary =
+    params.localResult.status === "fulfilled"
+      ? params.localResult.value
+      : {
+          summary: buildCompactionSummaryText(params.model),
+          firstKeptEntryId: params.preparation.firstKeptEntryId,
+          tokensBefore: params.preparation.tokensBefore,
+        };
+
+  return {
+    compaction: {
+      summary: localSummary.summary,
+      firstKeptEntryId: localSummary.firstKeptEntryId,
+      tokensBefore: localSummary.tokensBefore,
+      details: {
+        ...(localSummary.details !== undefined ? { localSummaryDetails: localSummary.details } : {}),
+        remoteCompaction: remoteDetails,
+      },
+    },
+  };
 }
 
 export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
@@ -255,42 +311,15 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
       }),
     ]);
 
-    if (remoteResult.status !== "fulfilled") {
-      if (localResult.status === "fulfilled") {
-        return { compaction: localResult.value };
-      }
-      if (!event.signal.aborted && ctx.hasUI) {
-        const message = remoteResult.reason instanceof Error ? remoteResult.reason.message : String(remoteResult.reason);
-        ctx.ui.notify(`OpenAI remote compaction failed; falling back to default compaction. ${message}`, "warning");
-      }
-      return undefined;
-    }
-
-    const remoteDetails = buildRemoteCompactionDetails(
+    return resolveCompactionOutcome({
       model,
-      remoteResult.value.output,
-      remoteResult.value.usage,
-    );
-    const localSummary =
-      localResult.status === "fulfilled"
-        ? localResult.value
-        : {
-            summary: buildCompactionSummaryText(model),
-            firstKeptEntryId: event.preparation.firstKeptEntryId,
-            tokensBefore: event.preparation.tokensBefore,
-          };
-
-    return {
-      compaction: {
-        summary: localSummary.summary,
-        firstKeptEntryId: localSummary.firstKeptEntryId,
-        tokensBefore: localSummary.tokensBefore,
-        details: {
-          ...(localSummary.details !== undefined ? { localSummaryDetails: localSummary.details } : {}),
-          remoteCompaction: remoteDetails,
-        },
-      },
-    };
+      preparation: event.preparation,
+      localResult,
+      remoteResult,
+      aborted: event.signal.aborted,
+      hasUI: ctx.hasUI,
+      ui: ctx.ui,
+    });
   });
 
   pi.on("message_end", (event, ctx) => {
@@ -344,6 +373,7 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
         hasUI: ctx.hasUI,
         notify: cfg.notify,
         ui: ctx.ui,
+        sessionId,
         model,
         features: ["remote_compaction_history"],
       });
@@ -377,6 +407,7 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
       hasUI: ctx.hasUI,
       notify: cfg.notify,
       ui: ctx.ui,
+      sessionId,
       model,
       features,
     });
