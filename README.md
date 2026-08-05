@@ -109,6 +109,8 @@ The compaction request mirrors the shape of surrounding normal requests (reasoni
 
 The extension clears live continuation state on: session start/reload/resume, switch/fork, tree navigation, compaction completion, model selection, and shutdown.
 
+Model selection also drops the cached Responses request shape, so a compaction triggered before the newly selected model's first turn cannot reuse the previous model's `reasoning`/`text` configuration.
+
 Remote compaction history is only replayed for compatible models. Cross-model turns are filtered from reconstructed replay history to prevent contamination after resume or tree navigation.
 
 ## Data handling
