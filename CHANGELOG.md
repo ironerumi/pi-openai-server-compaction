@@ -3,6 +3,7 @@
 This changelog intentionally starts at **0.1.0**.
 
 ## Unreleased
+- dedupe the opt-in `notify` activation notice per session and model instead of per exact feature list, so it fires once per session rather than again on every feature-shape change
 - carry custom, organization, project, and model-registry headers into the OpenAI WebSocket handshake instead of dropping everything except factory-level headers; the extension's required Codex identity/session headers are applied last so a caller header cannot hijack session routing or auth
 - rotate a cached WebSocket session whenever its effective header set changes, not only on a model-key change, so a reused `sessionId` can no longer keep sending stale headers
 - clear the cached Responses request shape on model selection, so compacting immediately after a model switch no longer sends the previous model's `reasoning`/`text` shape to the newly selected model

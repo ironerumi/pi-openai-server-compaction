@@ -149,7 +149,7 @@ Environment overrides:
 | `PI_OPENAI_SERVER_COMPACTION_THRESHOLD`            | Explicit compact threshold (tokens)                         |
 | `PI_OPENAI_SERVER_COMPACTION_RATIO`                | Compact threshold as ratio of context window (default: 0.7) |
 | `PI_OPENAI_SERVER_COMPACTION_PREVIOUS_RESPONSE_ID` | Enable/disable `previous_response_id`                       |
-| `PI_OPENAI_SERVER_COMPACTION_NOTIFY`               | Show UI notifications when features activate                |
+| `PI_OPENAI_SERVER_COMPACTION_NOTIFY`               | One-time UI notice per session+model when features activate |
 
 ## Troubleshooting
 
