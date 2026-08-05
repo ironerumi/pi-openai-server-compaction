@@ -93,7 +93,6 @@ for (const packageName of [
 
 const {
   default: extensionFactory,
-  maybeNotifyRequestFeatures,
   resolveCompactionOutcome,
 } = await import(pathToFileURL(join(repoRoot, "src", "index.ts")).href);
 assert.equal(typeof extensionFactory, "function", "extension entrypoint should export a function");
@@ -554,42 +553,399 @@ assert.equal(
   "GitHub Copilot should never receive an explicit off reasoning field",
 );
 
-// --- notification noise fix: activation notice fires once per session+model, not once per feature-shape change ---
+// --- ordinary provider requests produce no compaction notification ---
 {
-  const notifiedModels = new Set();
-  const calls = [];
-  const ui = { notify: (msg, level) => calls.push({ msg, level }) };
-  const model = { provider: "openai", id: "gpt-5.4-nano" };
+  const notifyCalls = [];
+  const statusCalls = [];
+  const testHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { testHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
+  });
 
-  maybeNotifyRequestFeatures({
-    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
-    features: ["store=true", "context_management"],
-  });
-  maybeNotifyRequestFeatures({
-    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
-    features: ["store=true", "context_management", "previous_response_id"],
-  });
-  maybeNotifyRequestFeatures({
-    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
-    features: ["store=true", "context_management", "remote_compaction_history"],
-  });
-  maybeNotifyRequestFeatures({
-    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-1", model,
-    features: ["store=true", "context_management", "previous_response_id"],
-  });
-  assert.equal(calls.length, 1, "activation notice should fire once per session+model, not once per feature-shape change");
+  const testModel = {
+    provider: "openai",
+    api: "openai-responses",
+    id: "gpt-5.4-nano",
+    input: ["text"],
+  };
+  const testCtx = {
+    hasUI: true,
+    cwd: repoRoot,
+    ui: {
+      notify: (msg, level) => notifyCalls.push({ msg, level }),
+      setStatus: (key, text) => statusCalls.push({ key, text }),
+    },
+    model: testModel,
+    sessionManager: {
+      getSessionId: () => "sess-provider-req",
+      getBranch: () => [],
+    },
+  };
 
-  maybeNotifyRequestFeatures({
-    notifiedModels, hasUI: true, notify: true, ui, sessionId: "sess-2", model,
-    features: ["store=true", "context_management"],
-  });
-  assert.equal(calls.length, 2, "a distinct session must still receive its own one-time activation notice");
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  const originalEnabledEnv = process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+    process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = "true";
+    const patched = testHandlers.before_provider_request(
+      {
+        type: "before_provider_request",
+        payload: { model: "gpt-5.4-nano", input: [{ role: "user", content: "hello" }] },
+      },
+      testCtx,
+    );
+    assert.ok(patched, "the request handler must have run its full patch path, not returned early");
+    assert.ok(
+      Array.isArray(patched.context_management),
+      "expected the patched payload that proves the handler reached the end of the request path",
+    );
+    assert.equal(notifyCalls.length, 0, "ordinary provider request must not emit a compaction notification");
+    assert.equal(statusCalls.length, 0, "ordinary provider request must not set compaction status");
+  } finally {
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+    if (originalEnabledEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = originalEnabledEnv;
+  }
+}
 
-  maybeNotifyRequestFeatures({
-    notifiedModels, hasUI: true, notify: false, ui, sessionId: "sess-3", model,
-    features: ["store=true", "context_management"],
+// --- session_compact with fromExtension + valid remote details emits success ---
+{
+  const notifyCalls = [];
+  const compactHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { compactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
   });
-  assert.equal(calls.length, 2, "notify:false must still fully suppress the opt-in activation notice");
+
+  const validRemoteDetails = buildRemoteCompactionDetails(
+    { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+    [{ type: "compaction", encrypted_content: "ENCRYPTED" }],
+  );
+
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+
+    compactHandlers.session_compact(
+      {
+        type: "session_compact",
+        compactionEntry: {
+          type: "compaction", id: "cmp-1", summary: "test",
+          firstKeptEntryId: "e-1", tokensBefore: 100,
+          details: { remoteCompaction: validRemoteDetails },
+        },
+        fromExtension: true,
+        reason: "threshold",
+        willRetry: false,
+      },
+      {
+        hasUI: true,
+        cwd: repoRoot,
+        ui: { notify: (msg, level) => notifyCalls.push({ msg, level }), setStatus() {} },
+        model: { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+        sessionManager: { getSessionId: () => "sess-compact-ok", getBranch: () => [] },
+      },
+    );
+    assert.equal(notifyCalls.length, 1, "fromExtension + valid remote details should emit exactly one success notification");
+    assert.equal(notifyCalls[0].level, "info");
+    assert.match(notifyCalls[0].msg, /remote compaction applied/i);
+  } finally {
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+  }
+}
+
+// --- session_compact without fromExtension emits no success notification ---
+{
+  const notifyCalls = [];
+  const compactHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { compactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
+  });
+
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+
+    compactHandlers.session_compact(
+      {
+        type: "session_compact",
+        compactionEntry: {
+          type: "compaction", id: "cmp-2", summary: "pi default",
+          firstKeptEntryId: "e-2", tokensBefore: 200,
+          details: {},
+        },
+        fromExtension: false,
+        reason: "threshold",
+        willRetry: false,
+      },
+      {
+        hasUI: true,
+        cwd: repoRoot,
+        ui: { notify: (msg, level) => notifyCalls.push({ msg, level }), setStatus() {} },
+        model: { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+        sessionManager: { getSessionId: () => "sess-compact-noext", getBranch: () => [] },
+      },
+    );
+    assert.equal(notifyCalls.length, 0, "local/default compaction (fromExtension=false) must not emit remote-success notification");
+  } finally {
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+  }
+}
+
+// --- session_compact with fromExtension but no valid remote details emits no success ---
+{
+  const notifyCalls = [];
+  const compactHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { compactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
+  });
+
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+
+    compactHandlers.session_compact(
+      {
+        type: "session_compact",
+        compactionEntry: {
+          type: "compaction", id: "cmp-3", summary: "local fallback only",
+          firstKeptEntryId: "e-3", tokensBefore: 300,
+          details: { localSummaryDetails: { something: true } },
+        },
+        fromExtension: true,
+        reason: "threshold",
+        willRetry: false,
+      },
+      {
+        hasUI: true,
+        cwd: repoRoot,
+        ui: { notify: (msg, level) => notifyCalls.push({ msg, level }), setStatus() {} },
+        model: { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+        sessionManager: { getSessionId: () => "sess-compact-noremote", getBranch: () => [] },
+      },
+    );
+    assert.equal(notifyCalls.length, 0, "fromExtension with no valid remote details (local fallback) must not emit remote-success notification");
+  } finally {
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+  }
+}
+
+// --- disabled notify suppresses success notification even on valid remote compaction ---
+{
+  const notifyCalls = [];
+  const compactHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { compactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
+  });
+
+  const validRemoteDetails = buildRemoteCompactionDetails(
+    { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+    [{ type: "compaction", encrypted_content: "ENCRYPTED" }],
+  );
+
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "false";
+
+    compactHandlers.session_compact(
+      {
+        type: "session_compact",
+        compactionEntry: {
+          type: "compaction", id: "cmp-4", summary: "test",
+          firstKeptEntryId: "e-4", tokensBefore: 100,
+          details: { remoteCompaction: validRemoteDetails },
+        },
+        fromExtension: true,
+        reason: "threshold",
+        willRetry: false,
+      },
+      {
+        hasUI: true,
+        cwd: repoRoot,
+        ui: { notify: (msg, level) => notifyCalls.push({ msg, level }), setStatus() {} },
+        model: { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+        sessionManager: { getSessionId: () => "sess-compact-nonotify", getBranch: () => [] },
+      },
+    );
+    assert.equal(notifyCalls.length, 0, "notify:false must suppress success notification");
+  } finally {
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+  }
+}
+
+// --- absent UI suppresses success notification ---
+{
+  const notifyCalls = [];
+  const compactHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { compactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
+  });
+
+  const validRemoteDetails = buildRemoteCompactionDetails(
+    { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+    [{ type: "compaction", encrypted_content: "ENCRYPTED" }],
+  );
+
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+
+    compactHandlers.session_compact(
+      {
+        type: "session_compact",
+        compactionEntry: {
+          type: "compaction", id: "cmp-5", summary: "test",
+          firstKeptEntryId: "e-5", tokensBefore: 100,
+          details: { remoteCompaction: validRemoteDetails },
+        },
+        fromExtension: true,
+        reason: "threshold",
+        willRetry: false,
+      },
+      {
+        hasUI: false,
+        cwd: repoRoot,
+        ui: { notify: (msg, level) => notifyCalls.push({ msg, level }), setStatus() {} },
+        model: { provider: "openai", api: "openai-responses", id: "gpt-5.4-nano" },
+        sessionManager: { getSessionId: () => "sess-compact-noui", getBranch: () => [] },
+      },
+    );
+    assert.equal(notifyCalls.length, 0, "absent UI (hasUI=false) must suppress success notification");
+  } finally {
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+  }
+}
+
+// --- session_before_compact sets a transient status and clears it on every exit path ---
+{
+  const beforeCompactHandlers = {};
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { beforeCompactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return undefined; },
+  });
+
+  const compactionModel = {
+    provider: "openai",
+    api: "openai-responses",
+    id: "gpt-5.4-nano",
+    input: ["text"],
+  };
+
+  const makeCompactCtx = (statusCalls, notifyCalls, overrides = {}) => ({
+    hasUI: true,
+    cwd: repoRoot,
+    ui: {
+      notify: (msg, level) => notifyCalls.push({ msg, level }),
+      setStatus: (key, text) => statusCalls.push({ key, text }),
+    },
+    model: compactionModel,
+    modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test" }) },
+    getSystemPrompt: () => "system prompt",
+    sessionManager: { getSessionId: () => "sess-before-compact", getBranch: () => [] },
+    ...overrides,
+  });
+
+  const compactEvent = {
+    type: "session_before_compact",
+    branchEntries: [],
+    preparation: { firstKeptEntryId: "entry-1", tokensBefore: 1234 },
+    signal: new AbortController().signal,
+  };
+
+  // The local-summary leg is intentionally left to fail; only the remote leg is
+  // stubbed, so the status lifecycle is what these assertions pin down.
+  const remoteCompactionSse =
+    'data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"SMOKE_ENCRYPTED"}}\n\n' +
+    'data: {"type":"response.completed","response":{}}\n\n' +
+    "data: [DONE]\n\n";
+  const isRemoteCompactionRequest = (init) =>
+    typeof init?.body === "string" && init.body.includes("compaction_trigger");
+
+  const originalFetch = globalThis.fetch;
+  const originalNotifyEnv = process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+  const originalEnabledEnv = process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+    process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = "true";
+
+    globalThis.fetch = async (_url, init) => {
+      if (!isRemoteCompactionRequest(init)) throw new Error("smoke: local summary model call is not stubbed");
+      return new Response(remoteCompactionSse, { status: 200 });
+    };
+    const okStatus = [];
+    const okNotify = [];
+    const outcome = await beforeCompactHandlers.session_before_compact(
+      compactEvent,
+      makeCompactCtx(okStatus, okNotify),
+    );
+    assert.ok(outcome?.compaction?.details?.remoteCompaction, "remote compaction should produce remote details");
+    assert.equal(okStatus.length, 2, "status must be set once and cleared once on the success path");
+    assert.equal(okStatus[0].key, okStatus[1].key, "set and clear must use the same status key");
+    assert.match(okStatus[0].text, /remote compaction in progress/i);
+    assert.equal(okStatus[1].text, undefined, "status must be cleared after a successful remote compaction");
+
+    globalThis.fetch = async () => { throw new Error("smoke: remote compaction endpoint unreachable"); };
+    const failStatus = [];
+    const failNotify = [];
+    await beforeCompactHandlers.session_before_compact(compactEvent, makeCompactCtx(failStatus, failNotify));
+    assert.equal(failStatus.length, 2, "status must be set once and cleared once on the failure path");
+    assert.equal(failStatus[0].key, failStatus[1].key);
+    assert.match(failStatus[0].text, /remote compaction in progress/i);
+    assert.equal(failStatus[1].text, undefined, "finally must clear the status when remote compaction throws");
+
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "false";
+    const quietStatus = [];
+    const quietNotify = [];
+    await beforeCompactHandlers.session_before_compact(compactEvent, makeCompactCtx(quietStatus, quietNotify));
+    assert.equal(quietStatus.length, 0, "notify:false must not write a footer status");
+
+    process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = "true";
+    const headlessStatus = [];
+    const headlessNotify = [];
+    await beforeCompactHandlers.session_before_compact(
+      compactEvent,
+      makeCompactCtx(headlessStatus, headlessNotify, { hasUI: false }),
+    );
+    assert.equal(headlessStatus.length, 0, "absent UI must not write a footer status");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalNotifyEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_NOTIFY = originalNotifyEnv;
+    if (originalEnabledEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = originalEnabledEnv;
+  }
 }
 
 // --- notify config/env-var plumbing is unchanged ---
