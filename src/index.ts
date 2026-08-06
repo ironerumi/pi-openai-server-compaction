@@ -240,6 +240,15 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
     clearResponsesRequestShapeState(sessionId);
   });
 
+  pi.on("thinking_level_select", (_event, ctx) => {
+    const sessionId = getSessionId(ctx);
+    // The cached request shape describes the *previous* thinking level; keeping
+    // it would send the previous level's reasoning/text tuning on a compaction
+    // requested right after a level change, exactly as model_select does for a
+    // model change. The next request at the new level repopulates the cache.
+    clearResponsesRequestShapeState(sessionId);
+  });
+
   pi.on("session_shutdown", () => {
     clearAllContinuationState();
     releaseAllWsSessions();
