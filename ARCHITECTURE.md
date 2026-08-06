@@ -100,7 +100,7 @@ Responsibilities:
 - hook into Pi compaction lifecycle
 - merge local and remote compaction results
 - reconstruct remote state on session start/tree/compaction
-- clear ephemeral state on switch/fork/tree/model/shutdown
+- clear ephemeral state on switch/fork/tree/model/thinking-level/shutdown
 
 If you want to understand the extension as a whole, start here.
 
