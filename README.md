@@ -111,6 +111,8 @@ The extension clears live continuation state on: session start/reload/resume, sw
 
 Model selection also drops the cached Responses request shape, so a compaction triggered before the newly selected model's first turn cannot reuse the previous model's `reasoning`/`text` configuration.
 
+Thinking-level selection drops only the cached `reasoning` config, so a compaction triggered before the next turn uses the newly selected level instead of the previous one. The cached `text` config is level-independent and is kept.
+
 Remote compaction history is only replayed for compatible models. Cross-model turns are filtered from reconstructed replay history to prevent contamination after resume or tree navigation.
 
 ## Data handling

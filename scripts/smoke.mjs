@@ -479,6 +479,32 @@ assert.equal(
   "model switch must clear cached request shape so an immediate compaction cannot reuse the previous model's reasoning/text config",
 );
 
+const thinkingSwitchSessionId = "session-thinking-switch-test";
+setResponsesRequestShapeState(thinkingSwitchSessionId, {
+  updatedAt: 1,
+  reasoning: { effort: "high", summary: "auto" },
+  text: { verbosity: "medium" },
+});
+registeredHandlers.thinking_level_select(
+  { type: "thinking_level_select", level: "low", previousLevel: "high" },
+  {
+    sessionManager: {
+      getSessionId: () => thinkingSwitchSessionId,
+      getBranch: () => [],
+    },
+  },
+);
+assert.equal(
+  getResponsesRequestShapeState(thinkingSwitchSessionId)?.reasoning,
+  undefined,
+  "thinking level switch must drop the cached reasoning config so an immediate compaction cannot reuse the previous level's effort",
+);
+assert.deepEqual(
+  getResponsesRequestShapeState(thinkingSwitchSessionId)?.text,
+  { verbosity: "medium" },
+  "thinking level switch must keep the level-independent cached text config so compaction still mirrors surrounding requests",
+);
+
 // --- a thinking-level change must invalidate the cached request shape so an
 // immediate /compact uses the newly selected level, not the previous one ---
 {
@@ -537,8 +563,7 @@ assert.equal(
     );
 
     // The user switches thinking to "low" before the next model turn; pi emits
-    // thinking_level_select for this. (?.() keeps the assertion below behavioral
-    // when the fork does not register the handler yet.)
+    // thinking_level_select for this.
     compactHandlers.thinking_level_select?.(
       { type: "thinking_level_select", level: "low", previousLevel: "high" },
       compactCtx,
@@ -568,6 +593,11 @@ assert.equal(
       capturedBodies[0].reasoning,
       { effort: "low", summary: "auto" },
       "compaction after a thinking-level change must use the newly selected level, not the cached shape from the previous level",
+    );
+    assert.deepEqual(
+      capturedBodies[0].text,
+      { verbosity: "high" },
+      "compaction after a thinking-level change must still mirror the cached, level-independent text config",
     );
   } finally {
     globalThis.fetch = originalFetch;

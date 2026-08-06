@@ -77,6 +77,13 @@ export function clearResponsesRequestShapeState(sessionId: string | undefined): 
   requestShapeBySessionId.delete(sessionId);
 }
 
+export function clearResponsesRequestShapeReasoning(sessionId: string | undefined): void {
+  if (!sessionId) return;
+  const state = requestShapeBySessionId.get(sessionId);
+  if (!state || state.reasoning === undefined) return;
+  requestShapeBySessionId.set(sessionId, { ...state, reasoning: undefined });
+}
+
 export function clearAllContinuationState(): void {
   continuationBySessionId.clear();
   remoteCompactionBySessionId.clear();
