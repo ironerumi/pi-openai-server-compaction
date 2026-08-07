@@ -40,6 +40,7 @@ import {
   clearAllContinuationState,
   clearContinuationState,
   clearRemoteCompactionState,
+  clearResponsesRequestShapeReasoning,
   clearResponsesRequestShapeState,
   getContinuationState,
   getRemoteCompactionState,
@@ -238,6 +239,15 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
     const sessionId = getSessionId(ctx);
     clearLiveContinuation(sessionId);
     clearResponsesRequestShapeState(sessionId);
+  });
+
+  pi.on("thinking_level_select", (_event, ctx) => {
+    const sessionId = getSessionId(ctx);
+    // Only the cached `reasoning` describes the previous thinking level; keeping
+    // it would send that level's effort on a compaction requested right after a
+    // level change. `text` is level-independent, so it stays cached and keeps
+    // mirroring surrounding requests. The next request repopulates `reasoning`.
+    clearResponsesRequestShapeReasoning(sessionId);
   });
 
   pi.on("session_shutdown", () => {

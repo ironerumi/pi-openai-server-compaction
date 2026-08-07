@@ -479,6 +479,133 @@ assert.equal(
   "model switch must clear cached request shape so an immediate compaction cannot reuse the previous model's reasoning/text config",
 );
 
+const thinkingSwitchSessionId = "session-thinking-switch-test";
+setResponsesRequestShapeState(thinkingSwitchSessionId, {
+  updatedAt: 1,
+  reasoning: { effort: "high", summary: "auto" },
+  text: { verbosity: "medium" },
+});
+registeredHandlers.thinking_level_select(
+  { type: "thinking_level_select", level: "low", previousLevel: "high" },
+  {
+    sessionManager: {
+      getSessionId: () => thinkingSwitchSessionId,
+      getBranch: () => [],
+    },
+  },
+);
+assert.equal(
+  getResponsesRequestShapeState(thinkingSwitchSessionId)?.reasoning,
+  undefined,
+  "thinking level switch must drop the cached reasoning config so an immediate compaction cannot reuse the previous level's effort",
+);
+assert.deepEqual(
+  getResponsesRequestShapeState(thinkingSwitchSessionId)?.text,
+  { verbosity: "medium" },
+  "thinking level switch must keep the level-independent cached text config so compaction still mirrors surrounding requests",
+);
+
+// --- a thinking-level change must invalidate the cached request shape so an
+// immediate /compact uses the newly selected level, not the previous one ---
+{
+  const compactHandlers = {};
+  const capturedBodies = [];
+  extensionFactory({
+    registerProvider() {},
+    on(eventName, handler) { compactHandlers[eventName] = handler; },
+    getAllTools() { return []; },
+    getActiveTools() { return []; },
+    getThinkingLevel() { return "low"; },
+  });
+
+  const reasoningModel = {
+    provider: "openai",
+    api: "openai-responses",
+    id: "gpt-5.4-nano",
+    input: ["text"],
+    reasoning: true,
+    thinkingLevelMap: { off: "none", low: "low", medium: "medium", high: "high" },
+  };
+  const compactCtx = {
+    hasUI: false,
+    cwd: repoRoot,
+    ui: { notify() {}, setStatus() {} },
+    model: reasoningModel,
+    modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test" }) },
+    getSystemPrompt: () => "system prompt",
+    sessionManager: { getSessionId: () => "sess-thinking-change", getBranch: () => [] },
+  };
+
+  const remoteCompactionSse =
+    'data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"SMOKE_ENCRYPTED"}}\n\n' +
+    'data: {"type":"response.completed","response":{}}\n\n' +
+    "data: [DONE]\n\n";
+  const isRemoteCompactionRequest = (init) =>
+    typeof init?.body === "string" && init.body.includes("compaction_trigger");
+
+  const originalFetch = globalThis.fetch;
+  const originalEnabledEnv = process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+  try {
+    process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = "true";
+
+    // A completed request at "high" caches its Responses reasoning/text shape.
+    compactHandlers.before_provider_request(
+      {
+        type: "before_provider_request",
+        payload: {
+          model: "gpt-5.4-nano",
+          input: [{ role: "user", content: "hello" }],
+          reasoning: { effort: "high", summary: "auto" },
+          text: { verbosity: "high" },
+        },
+      },
+      compactCtx,
+    );
+
+    // The user switches thinking to "low" before the next model turn; pi emits
+    // thinking_level_select for this.
+    compactHandlers.thinking_level_select?.(
+      { type: "thinking_level_select", level: "low", previousLevel: "high" },
+      compactCtx,
+    );
+
+    globalThis.fetch = async (_url, init) => {
+      if (!isRemoteCompactionRequest(init)) throw new Error("smoke: local summary model call is not stubbed");
+      capturedBodies.push(JSON.parse(init.body));
+      return new Response(remoteCompactionSse, { status: 200 });
+    };
+
+    const outcome = await compactHandlers.session_before_compact(
+      {
+        type: "session_before_compact",
+        branchEntries: [],
+        preparation: { firstKeptEntryId: "entry-1", tokensBefore: 1234 },
+        signal: new AbortController().signal,
+      },
+      compactCtx,
+    );
+    assert.ok(
+      outcome?.compaction?.details?.remoteCompaction,
+      "remote compaction should produce remote details after a thinking-level change",
+    );
+    assert.equal(capturedBodies.length, 1, "the remote compaction endpoint should be called exactly once");
+    assert.deepEqual(
+      capturedBodies[0].reasoning,
+      { effort: "low", summary: "auto" },
+      "compaction after a thinking-level change must use the newly selected level, not the cached shape from the previous level",
+    );
+    assert.deepEqual(
+      capturedBodies[0].text,
+      { verbosity: "high" },
+      "compaction after a thinking-level change must still mirror the cached, level-independent text config",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalEnabledEnv === undefined) delete process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED;
+    else process.env.PI_OPENAI_SERVER_COMPACTION_ENABLED = originalEnabledEnv;
+  }
+}
+
 // "max" thinking level: a model that only maps it to an existing effort tier still gets that tier.
 const maxToXhighModel = {
   reasoning: true,
