@@ -2,7 +2,15 @@
 
 This changelog intentionally starts at **0.1.0**.
 
-## Unreleased
+## Unreleased — 0.2.0
+
+- target Pi 1.4.0; preserve input-embedded tool declarations and request configuration across remote compaction
+- rebuild replay from persisted custom context and unanswered turns, including repeated compaction and resume
+- reuse Pi's native Responses tool conversion and stream decoding for grammar tools, namespaces, and tool-call IDs
+- port upstream PR #28 while retaining the fork's header rotation, compaction lifecycle, and thinking-level fixes
+- add deterministic request/SDK/transport regressions and bounded live tool-execution acceptance; isolate tests from operator settings and unexpected HTTP traffic
+
+## Earlier fork changes
 - replace the misleading per-request "compaction active" activation notice with truthful compaction lifecycle UI: a transient footer status while a remote compaction attempt is in progress (set after all eligibility checks, cleared on every exit path), and an optional success notification emitted only from Pi's post-compaction event after verifying the saved entry contains valid remote-compaction details from this extension; local/default compaction never emits the remote-success notification
 - carry custom, organization, project, and model-registry headers into the OpenAI WebSocket handshake instead of dropping everything except factory-level headers; the extension's required Codex identity/session headers are applied last so a caller header cannot hijack session routing or auth
 - rotate a cached WebSocket session whenever its effective header set changes, not only on a model-key change, so a reused `sessionId` can no longer keep sending stale headers

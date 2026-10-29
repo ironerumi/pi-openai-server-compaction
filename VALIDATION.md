@@ -1,6 +1,14 @@
 # Validation
 
-## Current Responses compaction v2 validation
+## Pi 1.4.0 compatibility acceptance
+
+The current target is Pi 1.4.0 on Node 25.8.1. `npm test` passes typechecking, the fork's smoke regressions, and 19 runtime tests. Before the port, 17 of the 18 tool/context regression tests failed. After integration, all 19 runtime tests passed in 10 repeated runs, with two test processes running concurrently under live acceptance load.
+
+The bounded `test:live:tools` harness passed three runs on `openai-codex/gpt-6-astra` (one canary followed by two concurrent runs). Each run verified two native compactions, four real tool executions with fresh receipts, a dynamically loaded tool, and a grammar-tool call after reopening the saved session, using eight ordinary model requests. Portable-only compaction fallback is rejected by the harness.
+
+Local HTTP/WebSocket tests cover direct OpenAI transport, grammar/JSON tool decoding, current tool declarations, and persisted idle custom context. They do not establish fresh external direct-OpenAI acceptance. The older RPC recall/fork/model-switch suite and broad recall benchmark below were not re-run for this compatibility port. Hosted CI and release readiness are separate gates, not implied by these local results.
+
+## Earlier Responses compaction v2 validation
 
 The full live Pi RPC suite passes with both:
 
