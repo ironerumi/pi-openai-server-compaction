@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, existsSync, lstatSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -91,29 +91,6 @@ for (const packageName of [
   ensureLocalPeerLink(packageName);
 }
 
-// Pi resolves extensions' imports of host packages through a fixed allowlist
-// (`VIRTUAL_MODULES` in Pi's bundle): the package roots plus `pi-ai/compat`,
-// `/models`, `/oauth` and `/providers/all`. Any other host subpath resolves only
-// if a physical copy is installed, so a deep host import without a matching
-// `dependencies` entry makes the extension throw at load time - which disables
-// remote compaction silently, with no test failure, because tests resolve the
-// specifier through this repository's own node_modules.
-//
-// The extension therefore imports no host subpath at runtime: the Responses
-// internals it needs are vendored under `src/vendor/pi-ai` (see
-// `scripts/vendor-pi-ai.mjs`), and the host packages stay peer-only. Type-only
-// imports are erased before the loader resolves them, so they may use deep paths.
-const PI_HOST_VIRTUAL_MODULES = new Set([
-  "@earendil-works/pi-ai",
-  "@earendil-works/pi-ai/compat",
-  "@earendil-works/pi-ai/models",
-  "@earendil-works/pi-ai/oauth",
-  "@earendil-works/pi-ai/providers/all",
-  "@earendil-works/pi-agent-core",
-  "@earendil-works/pi-coding-agent",
-  "@earendil-works/pi-tui",
-]);
-
 const PI_HOST_PACKAGES = new Set([
   "@earendil-works/pi-agent-core",
   "@earendil-works/pi-ai",
@@ -123,55 +100,39 @@ const PI_HOST_PACKAGES = new Set([
   "typebox",
 ]);
 
-function listSourceFiles(dir, base = dir) {
-  const files = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listSourceFiles(path, base));
-    } else if (entry.isFile() && entry.name.endsWith(".ts")) {
-      files.push(path.slice(base.length + 1));
-    }
-  }
-  return files;
-}
-
-/** Every static import/export binding in a source file, with its specifier. */
-function collectImports(source) {
-  const imports = [];
-  const staticPattern = /(?:^|\n)\s*(?:import|export)\s*(type\s+)?[^;]*?from\s*"([^"]+)"/g;
-  for (const match of source.matchAll(staticPattern)) {
-    imports.push({ specifier: match[2], typeOnly: Boolean(match[1]) });
-  }
-  for (const match of source.matchAll(/(?:^|\n)\s*import\s*"([^"]+)"/g)) {
-    imports.push({ specifier: match[1], typeOnly: false });
-  }
-  for (const match of source.matchAll(/import\s*\(\s*"([^"]+)"/g)) {
-    imports.push({ specifier: match[1], typeOnly: false });
-  }
-  return imports;
-}
-
-function assertHostImportsResolveUnderPi() {
-  const sourceDir = join(repoRoot, "src");
-  const offenders = [];
-
-  for (const relativePath of listSourceFiles(sourceDir)) {
-    const source = readFileSync(join(sourceDir, relativePath), "utf8");
-    for (const { specifier, typeOnly } of collectImports(source)) {
-      if (!specifier.startsWith("@earendil-works/")) continue;
-      if (typeOnly) continue;
-      if (PI_HOST_VIRTUAL_MODULES.has(specifier)) continue;
-      offenders.push(`src/${relativePath}: ${specifier}`);
-    }
-  }
-
-  assert.deepEqual(
-    offenders,
-    [],
-    `host imports Pi cannot resolve at runtime:\n  ${offenders.join("\n  ")}\n` +
-      "Copy the module into src/vendor/pi-ai (npm run vendor:pi-ai) instead of importing it from the host.",
+async function assertHostImportsResolveUnderPi() {
+  const agentEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const { loadExtensions } = await import(
+    pathToFileURL(join(dirname(agentEntry), "core", "extensions", "loader.js")).href
   );
+  const fixtureDir = mkdtempSync(join(tmpdir(), "pi-lean-loader-"));
+  try {
+    cpSync(join(repoRoot, "src"), join(fixtureDir, "src"), { recursive: true });
+    cpSync(join(repoRoot, "package.json"), join(fixtureDir, "package.json"));
+    assert.equal(existsSync(join(fixtureDir, "node_modules")), false);
+
+    const entrypoint = join(fixtureDir, "src", "index.ts");
+    const runtimeFixture = join(fixtureDir, "runtime-import.ts");
+    const typeFixture = join(fixtureDir, "type-import.ts");
+    writeFileSync(runtimeFixture,
+      'import { convertTools } from "@earendil-works/pi-ai/api/constrained-sampling";\n' +
+      'export default function () { if (typeof convertTools !== "function") throw new Error("missing export"); }\n');
+    writeFileSync(typeFixture,
+      'import type { convertTools } from "@earendil-works/pi-ai/api/constrained-sampling";\n' +
+      'export default function () { const erased: typeof convertTools | undefined = undefined; }\n');
+
+    const loaded = await loadExtensions([entrypoint, typeFixture], fixtureDir);
+    assert.deepEqual(loaded.errors, [], "Pi must load the lean extension and erase type-only imports");
+    assert.deepEqual(loaded.extensions.map((extension) => extension.path), [entrypoint, typeFixture]);
+
+    const rejected = await loadExtensions([runtimeFixture], fixtureDir);
+    assert.equal(rejected.extensions.length, 0, "Pi must reject an unmapped runtime deep import");
+    assert.equal(rejected.errors.length, 1);
+    assert.match(rejected.errors[0].error, /Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/);
+    assert.match(rejected.errors[0].error, /@earendil-works\/pi-ai/);
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
 }
 
 function assertNoPhysicalHostDependency() {
@@ -193,7 +154,7 @@ function assertVendoredPiAiIsCurrent() {
   });
 }
 
-assertHostImportsResolveUnderPi();
+await assertHostImportsResolveUnderPi();
 assertNoPhysicalHostDependency();
 assertVendoredPiAiIsCurrent();
 
