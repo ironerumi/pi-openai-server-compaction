@@ -210,6 +210,8 @@ So the package is intentionally hybrid:
 
 Verifies imports/loadability plus offline regression checks over exported pure helpers (state clearing, compaction outcome resolution, WebSocket header merge/rotation) and over extension event wiring (the compaction progress status/success-notification lifecycle registered on `session_before_compact` and `session_compact`).
 
+It also enforces the loader constraint that shipped 0.2.0 broken: Pi resolves an extension's `@earendil-works/*` imports through a fixed allowlist (`VIRTUAL_MODULES`: the package roots plus `pi-ai/compat`, `/models`, `/oauth`, `/providers/all`), so any other host subpath must come from a physical `dependencies` copy or the extension throws at session start. The check fails on such an import, because importing the entrypoint from this repository cannot see the difference - `node_modules` here resolves the deep path regardless.
+
 ### Pi 1.4 regression suite
 
 `npm test` also runs `tests/*.test.mjs`: actual Pi request serialization, local HTTP/WS SDK sessions, dynamic tool updates, grammar tool replay, idle custom-context preservation, repeated compaction/resume, and the live harness's request ceiling. Offline tests fix extension configuration explicitly and intercept HTTP at the network boundary.

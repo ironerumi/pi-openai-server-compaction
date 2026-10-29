@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, existsSync, lstatSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -90,6 +90,51 @@ for (const packageName of [
 ]) {
   ensureLocalPeerLink(packageName);
 }
+
+// Pi resolves extensions' imports of host packages through a fixed allowlist
+// (`VIRTUAL_MODULES` in Pi's bundle): the package roots plus `pi-ai/compat`,
+// `/models`, `/oauth` and `/providers/all`. Any other host subpath resolves only
+// if a physical copy is installed, so a deep host import without a matching
+// `dependencies` entry makes the extension throw at load time - which disables
+// remote compaction silently, with no test failure, because tests resolve the
+// specifier through this repository's own node_modules.
+const PI_HOST_VIRTUAL_MODULES = new Set([
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-ai/compat",
+  "@earendil-works/pi-ai/models",
+  "@earendil-works/pi-ai/oauth",
+  "@earendil-works/pi-ai/providers/all",
+  "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-tui",
+]);
+
+function assertHostImportsResolveUnderPi() {
+  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  const physical = new Set(Object.keys(manifest.dependencies ?? {}));
+  const sourceDir = join(repoRoot, "src");
+  const offenders = [];
+
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+    const source = readFileSync(join(sourceDir, entry.name), "utf8");
+    for (const match of source.matchAll(/(?:from\s+|import\s*\()\s*"(@earendil-works\/[^"]+)"/g)) {
+      const specifier = match[1];
+      if (PI_HOST_VIRTUAL_MODULES.has(specifier)) continue;
+      const packageName = specifier.split("/").slice(0, 2).join("/");
+      if (physical.has(packageName)) continue;
+      offenders.push(`src/${entry.name}: ${specifier}`);
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `host imports Pi cannot resolve without a physical dependency:\n  ${offenders.join("\n  ")}`,
+  );
+}
+
+assertHostImportsResolveUnderPi();
 
 const {
   default: extensionFactory,

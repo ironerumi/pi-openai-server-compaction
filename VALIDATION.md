@@ -1,5 +1,19 @@
 # Validation
 
+## 0.2.1 loader fix
+
+0.2.0 shipped a release that could not load. `src/openai-ws-stream.ts` imported three deep host subpaths - `@earendil-works/pi-ai/api/constrained-sampling`, `api/openai-responses-shared`, `utils/event-stream` - which Pi's extension module mapping does not resolve (it maps only the package roots plus `pi-ai/compat`, `/models`, `/oauth`, `/providers/all`). Starting Pi with the installed package failed with `Cannot find module '@earendil-works/pi-ai/api/constrained-sampling'`, so remote compaction was disabled outright.
+
+Every check in the 0.2.0 validation run below still passed, because those runs resolved the deep specifiers through this repository's `node_modules`. That is the gap 0.2.1 closes:
+
+- `@earendil-works/pi-ai` is now a production dependency, so a managed install has a physical copy for the deep paths; the allowlisted specifiers still resolve to Pi's own copy, so no registry or provider state is duplicated.
+- `npm run smoke` fails on any host subpath that is neither mapped by Pi nor backed by a `dependencies` entry. Evidence it catches the shipped defect: with the check added and the dependency absent, smoke fails naming exactly those three imports; with the dependency added, smoke passes.
+- Loader before/after, same command: `pi -ne -e <tree>/src/index.ts -p "reply with exactly: ok"` → 0.2.0 tree: `Cannot find module '@earendil-works/pi-ai/api/constrained-sampling'`; 0.2.1 tree (installed with `npm ci --omit=dev`): prints `ok`.
+- `npm test`: typecheck, smoke, 19/19 runtime tests.
+- `test:live:tools` on `openai-codex/gpt-6-astra`: one run, status PASS, 2 native compactions, 4 tool executions (including a grammar tool after compaction), 8 requests.
+
+The loader probe is the check that the 0.2.0 validation lacked; `npm test` alone cannot detect this class of defect.
+
 ## Pi 1.4.0 compatibility acceptance
 
 The current target is Pi 1.4.0 on Node 25.8.1. `npm test` passes typechecking, the fork's smoke regressions, and 19 runtime tests. Before the port, 17 of the 18 tool/context regression tests failed. After integration, all 19 runtime tests passed in 10 repeated runs, with two test processes running concurrently under live acceptance load.

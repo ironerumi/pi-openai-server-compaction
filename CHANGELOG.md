@@ -2,6 +2,11 @@
 
 This changelog intentionally starts at **0.1.0**.
 
+## Unreleased — 0.2.1
+
+- load under Pi's extension loader again: import the deep `@earendil-works/pi-ai` helpers the WebSocket replay needs (`api/constrained-sampling`, `api/openai-responses-shared`, `utils/event-stream`) from a physical `dependencies` copy, because Pi's extension module mapping resolves only the package roots plus `pi-ai/compat`, `/models`, `/oauth`, and `/providers/all`. 0.2.0 threw `Cannot find module '@earendil-works/pi-ai/api/constrained-sampling'` at session start, which disabled remote compaction entirely while every test still passed (tests resolve those specifiers through this repository's own `node_modules`)
+- fail the smoke check on any host `@earendil-works/*` subpath that is neither in Pi's mapped set nor backed by a `dependencies` entry, so the next such import cannot ship
+
 ## Unreleased — 0.2.0
 
 - target Pi 1.4.0; preserve input-embedded tool declarations and request configuration across remote compaction

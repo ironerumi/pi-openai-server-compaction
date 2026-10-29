@@ -1,6 +1,6 @@
 {
   "name": "pi-openai-server-compaction",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Pi extension for OpenAI server-side compaction with Codex-quality continuity.",
@@ -39,12 +39,10 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-agent-core": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": { "optional": true },
-    "@earendil-works/pi-ai": { "optional": true },
     "@earendil-works/pi-agent-core": { "optional": true }
   },
   "scripts": {
@@ -55,11 +53,11 @@
     "test:live:tools": "node --experimental-strip-types ./tests/live/tool-access.mjs"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",
-    "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@types/node": "^24.10.0",
     "@types/ws": "^8.18.1",

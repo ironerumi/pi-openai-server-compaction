@@ -55,13 +55,13 @@ https://x.com/alexisgallagher/status/2042396986327060736?s=20 .)
 Project-local (recommended):
 
 ```bash
-pi install -l git:github.com/ironerumi/pi-openai-server-compaction@v0.2.0
+pi install -l git:github.com/ironerumi/pi-openai-server-compaction@v0.2.1
 ```
 
 Global:
 
 ```bash
-pi install git:github.com/ironerumi/pi-openai-server-compaction@v0.2.0
+pi install git:github.com/ironerumi/pi-openai-server-compaction@v0.2.1
 ```
 
 One-shot, non-persistent:
