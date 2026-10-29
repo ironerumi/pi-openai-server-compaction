@@ -1,5 +1,10 @@
 # Per-repo no-mistakes overrides.
 
+# This repository has no CI workflows: the fork's validation is the package's
+# own `npm test` plus the local loader and live probes recorded in VALIDATION.md.
+# Without this declaration the CI step waits for checks that can never register.
+no_ci: true
+
 # `npm test` runs typecheck + smoke with no live external calls (package.json).
 # Pin it as the Test step command so no-mistakes exercises the canonical
 # package command instead of agent-selected tests.
