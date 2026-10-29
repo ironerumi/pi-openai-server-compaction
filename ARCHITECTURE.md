@@ -139,12 +139,15 @@ bundle): the package roots plus `pi-ai/compat`, `/models`, `/oauth` and
 allowlist, so they cannot be imported from the host at runtime.
 
 They are copied here instead: `scripts/vendor-pi-ai.mjs` copies the modules from the
-pinned `@earendil-works/pi-ai` dev dependency and rewrites their imports to the
-host-provided helpers in `src/vendor/pi-ai/host.ts`. The extension therefore
-declares `@earendil-works/pi-ai` as a peer only, ships no second copy of the host
-module, and installs 200 KB instead of 101 MB.
+lockfile-resolved `@earendil-works/pi-ai` (also pinned transitively by the Pi dev
+dependencies) and rewrites unavailable imports to local copies or the host-provided
+helpers in `src/vendor/pi-ai/host.ts`. The extension therefore declares
+`@earendil-works/pi-ai` as a peer only and ships no second copy of the host module.
+The measured managed-install dependency footprint is recorded in
+[VALIDATION.md](VALIDATION.md#022-host-module-vendoring).
 
-`npm run vendor:pi-ai` regenerates the copy after a pi-ai bump;
+After upgrading the Pi dev dependencies, run `npm run vendor:pi-ai` to regenerate
+the copy from the installed pi-ai release and commit the result;
 `npm run vendor:pi-ai -- --check` fails when the committed copy is stale, and
 `tests/vendored-pi-ai-parity.test.mjs` compares the vendored behavior against the
 pi-ai release it came from.
@@ -229,7 +232,7 @@ So the package is intentionally hybrid:
 
 Verifies imports/loadability plus offline regression checks over exported pure helpers (state clearing, compaction outcome resolution, WebSocket header merge/rotation) and over extension event wiring (the compaction progress status/success-notification lifecycle registered on `session_before_compact` and `session_compact`).
 
-It also enforces the loader constraint that shipped 0.2.0 broken: Pi resolves an extension's `@earendil-works/*` imports through a fixed allowlist (`VIRTUAL_MODULES`: the package roots plus `pi-ai/compat`, `/models`, `/oauth`, `/providers/all`), so a runtime import of any other host subpath makes the extension throw at session start. The check fails on such an import - importing the entrypoint from this repository cannot see the difference, because `node_modules` here resolves the deep path regardless. Type-only imports are exempt: they are erased before the loader resolves them. The check also refuses a host-provided package in `dependencies`, which is what made a managed install pull pi-ai's provider SDKs and made Pi warn about a duplicated host module.
+It also enforces the [host-module constraint](#srcvendorpi-ai) with Pi's actual extension loader. The probe copies `src/` and `package.json` into a temporary directory without `node_modules`, then requires the real entrypoint and a type-only deep-import fixture to load successfully. A runtime deep-import fixture must fail with an unresolved-module error. This prevents the repository's installed dependencies from masking loader failures and verifies that type-only imports are erased. A separate manifest assertion refuses host-provided packages in `dependencies`, and the smoke check also runs the vendored-file freshness check.
 
 ### Pi 1.4 regression suite
 

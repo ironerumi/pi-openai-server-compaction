@@ -79,10 +79,10 @@ pi -e ./src/index.ts --model openai/gpt-5.6-luna
 - Auth/config for the model you want to use must already work in Pi
 - A supported OpenAI Responses model, e.g. `openai/gpt-5.6-sol` or `openai-codex/gpt-5.6-sol`
 
-The install footprint is ~200 KB: the only runtime dependency is `ws`. Pi's own
-`@earendil-works/pi-ai` is used as a peer, and the two Responses modules the
-WebSocket path needs (which Pi does not expose to extensions) are vendored under
-`src/vendor/pi-ai` - see [ARCHITECTURE.md](ARCHITECTURE.md#srcvendorpi-ai).
+The only installed runtime dependency is `ws`; Pi provides the host packages.
+See [ARCHITECTURE.md](ARCHITECTURE.md#srcvendorpi-ai) for the vendored Responses
+helpers and [VALIDATION.md](VALIDATION.md#022-host-module-vendoring) for measured
+dependency sizes.
 
 ## What it does
 

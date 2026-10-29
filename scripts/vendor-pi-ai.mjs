@@ -1,24 +1,8 @@
 #!/usr/bin/env node
 /**
- * Regenerate `src/vendor/pi-ai` from the pinned `@earendil-works/pi-ai` dev dependency.
- *
- * Why this exists:
- *
- * Pi resolves an extension's `@earendil-works/*` imports through a fixed allowlist
- * (`VIRTUAL_MODULES` in Pi's bundle): the package roots plus `pi-ai/compat`, `/models`,
- * `/oauth` and `/providers/all`. The Responses internals this extension needs
- * (`api/constrained-sampling`, `api/openai-responses-shared`) are outside that
- * allowlist, so they cannot be imported at runtime from the host.
- *
- * Installing a physical `@earendil-works/pi-ai` copy makes them resolvable, but it
- * drags in pi-ai's provider SDKs (~100 MB: openai, @anthropic-ai/sdk, @google/genai,
- * @aws-sdk/client-bedrock-runtime, ...) that this extension never loads, and Pi
- * warns that a host-provided package is declared in `dependencies` because the copy
- * bypasses the extension loader and creates duplicate runtime modules.
- *
- * So the needed modules are copied here instead, with their imports rewritten to the
- * host-provided equivalents. The extension then depends on `@earendil-works/pi-ai`
- * only as a peer (`"*"`), which Pi serves from its own copy.
+ * Regenerate `src/vendor/pi-ai` from the installed, lockfile-resolved pi-ai release.
+ * See ARCHITECTURE.md → `src/vendor/pi-ai` for the host-loader constraint and
+ * dependency upgrade workflow.
  *
  * Usage:
  *   node scripts/vendor-pi-ai.mjs           # regenerate
