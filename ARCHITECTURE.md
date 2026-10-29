@@ -138,17 +138,20 @@ bundle): the package roots plus `pi-ai/compat`, `/models`, `/oauth` and
 (`api/constrained-sampling`, `api/openai-responses-shared`) are outside that
 allowlist, so they cannot be imported from the host at runtime.
 
-They are copied here instead: `scripts/vendor-pi-ai.mjs` copies the modules from the
-lockfile-resolved `@earendil-works/pi-ai` (also pinned transitively by the Pi dev
-dependencies) and rewrites unavailable imports to local copies or the host-provided
-helpers in `src/vendor/pi-ai/host.ts`. The extension therefore declares
-`@earendil-works/pi-ai` as a peer only and ships no second copy of the host module.
-The measured managed-install dependency footprint is recorded in
+They are vendored here instead: `scripts/vendor-pi-ai.mjs` copies the modules from
+the pinned, lockfile-resolved `@earendil-works/pi-ai` release (a transitive Pi dev
+dependency) and rewrites unavailable imports to local copies or the host-provided
+helpers in `src/vendor/pi-ai/host.ts`. `EventStream` comes from the host package
+root. `@earendil-works/pi-ai` must stay in `peerDependencies` with a `"*"` range
+and must never appear in `dependencies`: a physical copy pulls about 100 MB of
+provider SDKs and makes Pi warn about a duplicated host module. The measured
+managed-install dependency footprint is recorded in
 [VALIDATION.md](VALIDATION.md#022-host-module-vendoring).
 
-After upgrading the Pi dev dependencies, run `npm run vendor:pi-ai` to regenerate
-the copy from the installed pi-ai release and commit the result;
-`npm run vendor:pi-ai -- --check` fails when the committed copy is stale, and
+After a pi-ai bump, including one from upgrading the Pi dev dependencies, run
+`npm run vendor:pi-ai` to regenerate the copy from the installed pi-ai release and
+commit the result. `npm run vendor:pi-ai -- --check` (also run by the smoke check)
+fails when the committed copy is stale, and
 `tests/vendored-pi-ai-parity.test.mjs` compares the vendored behavior against the
 pi-ai release it came from.
 
