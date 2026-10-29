@@ -1,5 +1,54 @@
 # Validation
 
+## 0.2.2 host-module vendoring
+
+0.2.1 fixed the loader break by declaring `@earendil-works/pi-ai` as a production
+dependency. That made the extension load, but it also meant a managed install
+pulled pi-ai's provider SDKs and Pi warned at every startup:
+
+```text
+Warning: Extension package ".../pi-openai-server-compaction/package.json": Host-provided extension packages must be declared in peerDependencies with a "*" range, not dependencies: @earendil-works/pi-ai. Installed copies can bypass the extension loader and create duplicate runtime modules.
+```
+
+Pi's own package documentation states the rule: host-provided packages belong in
+`peerDependencies` with a `"*"` range, and Pi suppresses peer installation for
+managed git installs (`npm install --omit=dev --legacy-peer-deps`). The reason
+0.2.1 needed the physical copy was that the extension imported three pi-ai
+internals outside Pi's mapped set (`api/constrained-sampling`,
+`api/openai-responses-shared`, `utils/event-stream`).
+
+0.2.2 replaces the physical dependency with vendored Responses helpers; the
+peer-only dependency rule and regeneration workflow are defined in
+[ARCHITECTURE.md](ARCHITECTURE.md#srcvendorpi-ai).
+
+Evidence, same machine, same commands:
+
+- Managed install (`npm install --omit=dev --legacy-peer-deps`, what Pi runs for a
+  git package): 101 MB -> 200 KB of `node_modules`; the remaining dependency is
+  `ws`. 94 MB of the old install was pi-ai's provider SDKs (openai 27 MB,
+  @anthropic-ai 14 MB, @google 11 MB, web-streams-polyfill 8.7 MB, @smithy 7.4 MB,
+  @aws-sdk 7.1 MB), which this extension never loads.
+- Loader probe with the lean install (`PI_OFFLINE=1 pi -ne -ns -np --no-themes
+  -nc --no-session --no-mcp -e <tree>/src/index.ts -p </dev/null`): no output,
+  the extension loads. The same probe on a manifest without the vendored copy
+  fails with `Cannot find module
+  '@earendil-works/pi-ai/api/constrained-sampling'`.
+- Startup warning, same Pi, package installed from a local package path so Pi's
+  manifest check applies: before this change the warning above is printed; after
+  it, no warning is printed.
+- `npm test`: typecheck, smoke, 22/22 runtime tests (19 existing plus 3 vendored
+  parity tests).
+- `npm run vendor:pi-ai -- --check`: the committed copy matches
+  `@earendil-works/pi-ai` 1.4.0.
+
+Upstream context: the gap this works around is known on the Pi side - pi#6557
+("Public pi-ai API subpaths are unavailable to extensions") and pi#11219 (the same
+`Cannot find module '@earendil-works/pi-ai/api/openai-responses-shared'` failure
+on a managed Windows install). Pi 1.4.0 still maps only the package roots plus
+`pi-ai/compat`, `/models`, `/oauth` and `/providers/all`. When Pi maps those
+subpaths, the vendored copy can be deleted and the extension can import the
+helpers from the host directly.
+
 ## 0.2.1 loader fix
 
 0.2.0 shipped a release that could not load. `src/openai-ws-stream.ts` imported three deep host subpaths - `@earendil-works/pi-ai/api/constrained-sampling`, `api/openai-responses-shared`, `utils/event-stream` - which Pi's extension module mapping does not resolve (it maps only the package roots plus `pi-ai/compat`, `/models`, `/oauth`, `/providers/all`). Starting Pi with the installed package failed with `Cannot find module '@earendil-works/pi-ai/api/constrained-sampling'`, so remote compaction was disabled outright.
@@ -12,11 +61,13 @@ Every check in the 0.2.0 validation run below still passed, because those runs r
 - `npm test`: typecheck, smoke, 19/19 runtime tests.
 - `test:live:tools` on `openai-codex/gpt-6-astra`: one run, status PASS, 2 native compactions, 4 tool executions (including a grammar tool after compaction), 8 requests.
 
-The loader probe is the check that the 0.2.0 validation lacked; `npm test` alone cannot detect this class of defect.
+The loader probe is the check that the 0.2.0 validation lacked. As of 0.2.2,
+`npm test` includes an executable Pi-loader probe; see
+[ARCHITECTURE.md](ARCHITECTURE.md#runtime-smoke).
 
 ## Pi 1.4.0 compatibility acceptance
 
-The current target is Pi 1.4.0 on Node 25.8.1. `npm test` passes typechecking, the fork's smoke regressions, and 19 runtime tests. Before the port, 17 of the 18 tool/context regression tests failed. After integration, all 19 runtime tests passed in 10 repeated runs, with two test processes running concurrently under live acceptance load.
+The Pi 1.4.0 compatibility port was validated on Node 25.8.1. At that point, `npm test` passed typechecking, the fork's smoke regressions, and 19 runtime tests. Before the port, 17 of the 18 tool/context regression tests failed. After integration, all 19 runtime tests passed in 10 repeated runs, with two test processes running concurrently under live acceptance load.
 
 The bounded `test:live:tools` harness passed three runs on `openai-codex/gpt-6-astra` (one canary followed by two concurrent runs). Each run verified two native compactions, four real tool executions with fresh receipts, a dynamically loaded tool, and a grammar-tool call after reopening the saved session, using eight ordinary model requests. Portable-only compaction fallback is rejected by the harness.
 

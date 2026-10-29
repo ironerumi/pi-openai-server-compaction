@@ -7,6 +7,7 @@
  */
 import {
   createAssistantMessageEventStream,
+  EventStream,
   getCurrentSystemPrompt,
   getCurrentTools,
   getDeclaredTools,
@@ -19,9 +20,14 @@ import {
   type StreamFunction,
 } from "@earendil-works/pi-ai";
 import { streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/compat";
-import { createGrammarToolInputProperties } from "@earendil-works/pi-ai/api/constrained-sampling";
-import { convertResponsesTools, processResponsesStream, type OpenAIResponsesStreamOptions } from "@earendil-works/pi-ai/api/openai-responses-shared";
-import { EventStream } from "@earendil-works/pi-ai/utils/event-stream";
+// Type-only import: erased at runtime, so the deep pi-ai path never has to resolve
+// inside Pi's extension loader. The implementation comes from the vendored copy.
+import type { OpenAIResponsesStreamOptions } from "@earendil-works/pi-ai/api/openai-responses-shared";
+import {
+  createGrammarToolInputProperties,
+  convertResponsesTools,
+  processResponsesStream,
+} from "./vendor/pi-ai/index.ts";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import { loadConfig } from "./config.ts";
 import {

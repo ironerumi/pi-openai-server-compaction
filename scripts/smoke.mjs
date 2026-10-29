@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, existsSync, lstatSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -91,50 +91,72 @@ for (const packageName of [
   ensureLocalPeerLink(packageName);
 }
 
-// Pi resolves extensions' imports of host packages through a fixed allowlist
-// (`VIRTUAL_MODULES` in Pi's bundle): the package roots plus `pi-ai/compat`,
-// `/models`, `/oauth` and `/providers/all`. Any other host subpath resolves only
-// if a physical copy is installed, so a deep host import without a matching
-// `dependencies` entry makes the extension throw at load time - which disables
-// remote compaction silently, with no test failure, because tests resolve the
-// specifier through this repository's own node_modules.
-const PI_HOST_VIRTUAL_MODULES = new Set([
-  "@earendil-works/pi-ai",
-  "@earendil-works/pi-ai/compat",
-  "@earendil-works/pi-ai/models",
-  "@earendil-works/pi-ai/oauth",
-  "@earendil-works/pi-ai/providers/all",
+const PI_HOST_PACKAGES = new Set([
   "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-ai",
   "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-tui",
+  "@sinclair/typebox",
+  "typebox",
 ]);
 
-function assertHostImportsResolveUnderPi() {
-  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-  const physical = new Set(Object.keys(manifest.dependencies ?? {}));
-  const sourceDir = join(repoRoot, "src");
-  const offenders = [];
+async function assertHostImportsResolveUnderPi() {
+  const agentEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const { loadExtensions } = await import(
+    pathToFileURL(join(dirname(agentEntry), "core", "extensions", "loader.js")).href
+  );
+  const fixtureDir = mkdtempSync(join(tmpdir(), "pi-lean-loader-"));
+  try {
+    cpSync(join(repoRoot, "src"), join(fixtureDir, "src"), { recursive: true });
+    cpSync(join(repoRoot, "package.json"), join(fixtureDir, "package.json"));
+    assert.equal(existsSync(join(fixtureDir, "node_modules")), false);
 
-  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
-    const source = readFileSync(join(sourceDir, entry.name), "utf8");
-    for (const match of source.matchAll(/(?:from\s+|import\s*\()\s*"(@earendil-works\/[^"]+)"/g)) {
-      const specifier = match[1];
-      if (PI_HOST_VIRTUAL_MODULES.has(specifier)) continue;
-      const packageName = specifier.split("/").slice(0, 2).join("/");
-      if (physical.has(packageName)) continue;
-      offenders.push(`src/${entry.name}: ${specifier}`);
-    }
+    const entrypoint = join(fixtureDir, "src", "index.ts");
+    const runtimeFixture = join(fixtureDir, "runtime-import.ts");
+    const typeFixture = join(fixtureDir, "type-import.ts");
+    writeFileSync(runtimeFixture,
+      'import { convertTools } from "@earendil-works/pi-ai/api/constrained-sampling";\n' +
+      'export default function () { if (typeof convertTools !== "function") throw new Error("missing export"); }\n');
+    writeFileSync(typeFixture,
+      'import type { convertTools } from "@earendil-works/pi-ai/api/constrained-sampling";\n' +
+      'export default function () { const erased: typeof convertTools | undefined = undefined; }\n');
+
+    const loaded = await loadExtensions([entrypoint, typeFixture], fixtureDir);
+    assert.deepEqual(loaded.errors, [], "Pi must load the lean extension and erase type-only imports");
+    assert.deepEqual(loaded.extensions.map((extension) => extension.path), [entrypoint, typeFixture]);
+
+    const rejected = await loadExtensions([runtimeFixture], fixtureDir);
+    assert.equal(rejected.extensions.length, 0, "Pi must reject an unmapped runtime deep import");
+    assert.equal(rejected.errors.length, 1);
+    assert.match(rejected.errors[0].error, /Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/);
+    assert.match(rejected.errors[0].error, /@earendil-works\/pi-ai/);
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
   }
+}
 
+function assertNoPhysicalHostDependency() {
+  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  const physical = Object.keys(manifest.dependencies ?? {}).filter((name) =>
+    PI_HOST_PACKAGES.has(name),
+  );
   assert.deepEqual(
-    offenders,
+    physical,
     [],
-    `host imports Pi cannot resolve without a physical dependency:\n  ${offenders.join("\n  ")}`,
+    `host-provided packages must stay peer-only, not dependencies: ${physical.join(", ")}`,
   );
 }
 
-assertHostImportsResolveUnderPi();
+function assertVendoredPiAiIsCurrent() {
+  execFileSync(process.execPath, [join(repoRoot, "scripts", "vendor-pi-ai.mjs"), "--check"], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+await assertHostImportsResolveUnderPi();
+assertNoPhysicalHostDependency();
+assertVendoredPiAiIsCurrent();
 
 const {
   default: extensionFactory,

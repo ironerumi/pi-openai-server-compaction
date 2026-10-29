@@ -55,13 +55,13 @@ https://x.com/alexisgallagher/status/2042396986327060736?s=20 .)
 Project-local (recommended):
 
 ```bash
-pi install -l git:github.com/ironerumi/pi-openai-server-compaction@v0.2.1
+pi install -l git:github.com/ironerumi/pi-openai-server-compaction@v0.2.2
 ```
 
 Global:
 
 ```bash
-pi install git:github.com/ironerumi/pi-openai-server-compaction@v0.2.1
+pi install git:github.com/ironerumi/pi-openai-server-compaction@v0.2.2
 ```
 
 One-shot, non-persistent:
@@ -78,6 +78,10 @@ pi -e ./src/index.ts --model openai/gpt-5.6-luna
 - Pi **1.4.0** (the tested SDK target; older Pi versions are no longer supported). Host-provided Pi peers use `*` as required by Pi's package loader; this is not a claim of compatibility with every Pi version.
 - Auth/config for the model you want to use must already work in Pi
 - A supported OpenAI Responses model, e.g. `openai/gpt-5.6-sol` or `openai-codex/gpt-5.6-sol`
+
+The managed-install dependency footprint is about 200 KB: `ws` is the only runtime
+dependency, and `@earendil-works/pi-ai` is a peer supplied by Pi. See
+[ARCHITECTURE.md](ARCHITECTURE.md#srcvendorpi-ai) for the vendored Responses helpers.
 
 ## What it does
 
