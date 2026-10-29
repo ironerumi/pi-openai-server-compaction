@@ -1,6 +1,6 @@
 {
   "name": "pi-openai-server-compaction",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "Pi extension for OpenAI server-side compaction with Codex-quality continuity.",
@@ -39,10 +39,12 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-agent-core": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": { "optional": true },
+    "@earendil-works/pi-ai": { "optional": true },
     "@earendil-works/pi-agent-core": { "optional": true }
   },
   "scripts": {
@@ -50,10 +52,10 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run smoke && node --experimental-strip-types --test tests/*.test.mjs",
     "test:live": "node --experimental-strip-types ./tests/live/openai-compaction-rpc-live.ts",
-    "test:live:tools": "node --experimental-strip-types ./tests/live/tool-access.mjs"
+    "test:live:tools": "node --experimental-strip-types ./tests/live/tool-access.mjs",
+    "vendor:pi-ai": "node ./scripts/vendor-pi-ai.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "1.4.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

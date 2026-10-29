@@ -2,6 +2,12 @@
 
 This changelog intentionally starts at **0.1.0**.
 
+## Unreleased — 0.2.2
+
+- drop the physical `@earendil-works/pi-ai` dependency: the Responses internals the WebSocket replay needs (`api/constrained-sampling`, `api/openai-responses-shared`) are now vendored under `src/vendor/pi-ai` by `scripts/vendor-pi-ai.mjs`, so the extension depends on the host package only as a peer (`"*"`). A managed install shrinks from 101 MB to 200 KB (pi-ai's provider SDKs - openai, @anthropic-ai/sdk, @google/genai, @aws-sdk/client-bedrock-runtime - were 94 MB of that and are never loaded by this extension), Pi stops warning that a host-provided package is declared in `dependencies`, and no second copy of the host module is loaded at runtime
+- keep the vendored copy honest: `npm run vendor:pi-ai -- --check` fails when the committed copy no longer matches the pinned `@earendil-works/pi-ai` release, and `tests/vendored-pi-ai-parity.test.mjs` compares the vendored tool conversion, grammar tool input properties, and stream decoding against that release
+- tighten the smoke check: a runtime (non-type-only) `@earendil-works/*` import outside Pi's mapped set now fails the check instead of being excused by a `dependencies` entry, and no host-provided package may appear in `dependencies` at all
+
 ## Unreleased — 0.2.1
 
 - load under Pi's extension loader again: import the deep `@earendil-works/pi-ai` helpers the WebSocket replay needs (`api/constrained-sampling`, `api/openai-responses-shared`, `utils/event-stream`) from a physical `dependencies` copy, because Pi's extension module mapping resolves only the package roots plus `pi-ai/compat`, `/models`, `/oauth`, and `/providers/all`. 0.2.0 threw `Cannot find module '@earendil-works/pi-ai/api/constrained-sampling'` at session start, which disabled remote compaction entirely while every test still passed (tests resolve those specifiers through this repository's own `node_modules`)

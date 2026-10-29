@@ -98,6 +98,11 @@ for (const packageName of [
 // `dependencies` entry makes the extension throw at load time - which disables
 // remote compaction silently, with no test failure, because tests resolve the
 // specifier through this repository's own node_modules.
+//
+// The extension therefore imports no host subpath at runtime: the Responses
+// internals it needs are vendored under `src/vendor/pi-ai` (see
+// `scripts/vendor-pi-ai.mjs`), and the host packages stay peer-only. Type-only
+// imports are erased before the loader resolves them, so they may use deep paths.
 const PI_HOST_VIRTUAL_MODULES = new Set([
   "@earendil-works/pi-ai",
   "@earendil-works/pi-ai/compat",
@@ -109,32 +114,88 @@ const PI_HOST_VIRTUAL_MODULES = new Set([
   "@earendil-works/pi-tui",
 ]);
 
+const PI_HOST_PACKAGES = new Set([
+  "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-tui",
+  "@sinclair/typebox",
+  "typebox",
+]);
+
+function listSourceFiles(dir, base = dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listSourceFiles(path, base));
+    } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+      files.push(path.slice(base.length + 1));
+    }
+  }
+  return files;
+}
+
+/** Every static import/export binding in a source file, with its specifier. */
+function collectImports(source) {
+  const imports = [];
+  const staticPattern = /(?:^|\n)\s*(?:import|export)\s*(type\s+)?[^;]*?from\s*"([^"]+)"/g;
+  for (const match of source.matchAll(staticPattern)) {
+    imports.push({ specifier: match[2], typeOnly: Boolean(match[1]) });
+  }
+  for (const match of source.matchAll(/(?:^|\n)\s*import\s*"([^"]+)"/g)) {
+    imports.push({ specifier: match[1], typeOnly: false });
+  }
+  for (const match of source.matchAll(/import\s*\(\s*"([^"]+)"/g)) {
+    imports.push({ specifier: match[1], typeOnly: false });
+  }
+  return imports;
+}
+
 function assertHostImportsResolveUnderPi() {
-  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-  const physical = new Set(Object.keys(manifest.dependencies ?? {}));
   const sourceDir = join(repoRoot, "src");
   const offenders = [];
 
-  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
-    const source = readFileSync(join(sourceDir, entry.name), "utf8");
-    for (const match of source.matchAll(/(?:from\s+|import\s*\()\s*"(@earendil-works\/[^"]+)"/g)) {
-      const specifier = match[1];
+  for (const relativePath of listSourceFiles(sourceDir)) {
+    const source = readFileSync(join(sourceDir, relativePath), "utf8");
+    for (const { specifier, typeOnly } of collectImports(source)) {
+      if (!specifier.startsWith("@earendil-works/")) continue;
+      if (typeOnly) continue;
       if (PI_HOST_VIRTUAL_MODULES.has(specifier)) continue;
-      const packageName = specifier.split("/").slice(0, 2).join("/");
-      if (physical.has(packageName)) continue;
-      offenders.push(`src/${entry.name}: ${specifier}`);
+      offenders.push(`src/${relativePath}: ${specifier}`);
     }
   }
 
   assert.deepEqual(
     offenders,
     [],
-    `host imports Pi cannot resolve without a physical dependency:\n  ${offenders.join("\n  ")}`,
+    `host imports Pi cannot resolve at runtime:\n  ${offenders.join("\n  ")}\n` +
+      "Copy the module into src/vendor/pi-ai (npm run vendor:pi-ai) instead of importing it from the host.",
   );
 }
 
+function assertNoPhysicalHostDependency() {
+  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  const physical = Object.keys(manifest.dependencies ?? {}).filter((name) =>
+    PI_HOST_PACKAGES.has(name),
+  );
+  assert.deepEqual(
+    physical,
+    [],
+    `host-provided packages must stay peer-only, not dependencies: ${physical.join(", ")}`,
+  );
+}
+
+function assertVendoredPiAiIsCurrent() {
+  execFileSync(process.execPath, [join(repoRoot, "scripts", "vendor-pi-ai.mjs"), "--check"], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
 assertHostImportsResolveUnderPi();
+assertNoPhysicalHostDependency();
+assertVendoredPiAiIsCurrent();
 
 const {
   default: extensionFactory,

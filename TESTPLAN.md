@@ -59,6 +59,16 @@
 - Confirm footer/session stats show non-zero token/cost totals.
 - Compare rough totals against dashboard/provider logs when possible.
 
+### 8. Vendored pi-ai parity
+- Run `npm run vendor:pi-ai -- --check` after any pi-ai bump; it must report that
+  `src/vendor/pi-ai` matches the pinned release.
+- Run `npm test`; the vendored parity tests must pass, i.e. the vendored tool
+  conversion, grammar tool input properties, and stream decoding behave exactly
+  like the pi-ai release they were copied from.
+- Install the package the way Pi installs it (`npm install --omit=dev
+  --legacy-peer-deps`) and confirm `node_modules` stays small and Pi prints no
+  "Host-provided extension packages" warning at startup.
+
 ## Automated live test
 
 ```bash

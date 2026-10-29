@@ -127,8 +127,27 @@ Responsibilities:
 - reuse a live WebSocket session when safe
 - send incremental post-turn deltas for direct OpenAI continuation when request shape is unchanged
 - replay remote compaction history when available
-- delegate tool conversion and WS stream decoding to Pi's native Responses helpers (including grammar tools and namespaces)
+- decode the WS stream with Pi's native Responses helpers (including grammar tools and namespaces)
 - compute usage/cost information for the WS path
+
+### `src/vendor/pi-ai`
+
+Pi's extension loader maps a fixed allowlist of host modules (`VIRTUAL_MODULES` in Pi's
+bundle): the package roots plus `pi-ai/compat`, `/models`, `/oauth` and
+`/providers/all`. The Responses internals this extension needs
+(`api/constrained-sampling`, `api/openai-responses-shared`) are outside that
+allowlist, so they cannot be imported from the host at runtime.
+
+They are copied here instead: `scripts/vendor-pi-ai.mjs` copies the modules from the
+pinned `@earendil-works/pi-ai` dev dependency and rewrites their imports to the
+host-provided helpers in `src/vendor/pi-ai/host.ts`. The extension therefore
+declares `@earendil-works/pi-ai` as a peer only, ships no second copy of the host
+module, and installs 200 KB instead of 101 MB.
+
+`npm run vendor:pi-ai` regenerates the copy after a pi-ai bump;
+`npm run vendor:pi-ai -- --check` fails when the committed copy is stale, and
+`tests/vendored-pi-ai-parity.test.mjs` compares the vendored behavior against the
+pi-ai release it came from.
 
 ### `src/openai-ws-connection.ts`
 
@@ -210,7 +229,7 @@ So the package is intentionally hybrid:
 
 Verifies imports/loadability plus offline regression checks over exported pure helpers (state clearing, compaction outcome resolution, WebSocket header merge/rotation) and over extension event wiring (the compaction progress status/success-notification lifecycle registered on `session_before_compact` and `session_compact`).
 
-It also enforces the loader constraint that shipped 0.2.0 broken: Pi resolves an extension's `@earendil-works/*` imports through a fixed allowlist (`VIRTUAL_MODULES`: the package roots plus `pi-ai/compat`, `/models`, `/oauth`, `/providers/all`), so any other host subpath must come from a physical `dependencies` copy or the extension throws at session start. The check fails on such an import, because importing the entrypoint from this repository cannot see the difference - `node_modules` here resolves the deep path regardless.
+It also enforces the loader constraint that shipped 0.2.0 broken: Pi resolves an extension's `@earendil-works/*` imports through a fixed allowlist (`VIRTUAL_MODULES`: the package roots plus `pi-ai/compat`, `/models`, `/oauth`, `/providers/all`), so a runtime import of any other host subpath makes the extension throw at session start. The check fails on such an import - importing the entrypoint from this repository cannot see the difference, because `node_modules` here resolves the deep path regardless. Type-only imports are exempt: they are erased before the loader resolves them. The check also refuses a host-provided package in `dependencies`, which is what made a managed install pull pi-ai's provider SDKs and made Pi warn about a duplicated host module.
 
 ### Pi 1.4 regression suite
 
