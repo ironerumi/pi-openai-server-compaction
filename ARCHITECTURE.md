@@ -99,7 +99,7 @@ Responsibilities:
 - patch outgoing provider payloads
 - hook into Pi compaction lifecycle
 - merge local and remote compaction results
-- reconstruct remote state on session start/tree/compaction
+- reconstruct remote state on session start/tree/compaction, before requests, and before subsequent compactions
 - clear ephemeral state on switch/fork/tree/model/thinking-level/shutdown
 
 If you want to understand the extension as a whole, start here.
@@ -127,7 +127,7 @@ Responsibilities:
 - reuse a live WebSocket session when safe
 - send incremental post-turn deltas for direct OpenAI continuation when request shape is unchanged
 - replay remote compaction history when available
-- translate OpenAI WS events into Pi assistant stream events/messages
+- delegate tool conversion and WS stream decoding to Pi's native Responses helpers (including grammar tools and namespaces)
 - compute usage/cost information for the WS path
 
 ### `src/openai-ws-connection.ts`
@@ -179,10 +179,12 @@ The extension intentionally avoids reusing provider-native continuity blindly.
 Important safety rules:
 
 - remote replacement history is only reused for compatible OpenAI/OpenAI Codex Responses models
-- in-memory remote history is only extended while the active model still matches the compaction model
+- remote history is reconstructed from the persisted branch, including custom context, branch summaries, and unanswered turns
 - reconstructed remote history only replays post-compaction turns whose assistant completions match the compaction model, avoiding cross-model pollution after resume/tree reload
 - live `previous_response_id` state is cleared on key session/model lifecycle boundaries
 - HTTP fallback remains available if the WS path is unavailable or unsafe
+- remote replay replaces conversation items, not Pi's input-embedded tool declarations, system/developer instructions, or reasoning configuration
+- direct WS requests read current tools and instructions from Pi 1.4 transcript system messages rather than obsolete `context.tools`/`context.systemPrompt` fields
 
 ## Why both local summary and remote compaction exist
 
@@ -207,6 +209,12 @@ So the package is intentionally hybrid:
 - `npm run smoke`
 
 Verifies imports/loadability plus offline regression checks over exported pure helpers (state clearing, compaction outcome resolution, WebSocket header merge/rotation) and over extension event wiring (the compaction progress status/success-notification lifecycle registered on `session_before_compact` and `session_compact`).
+
+### Pi 1.4 regression suite
+
+`npm test` also runs `tests/*.test.mjs`: actual Pi request serialization, local HTTP/WS SDK sessions, dynamic tool updates, grammar tool replay, idle custom-context preservation, repeated compaction/resume, and the live harness's request ceiling. Offline tests fix extension configuration explicitly and intercept HTTP at the network boundary.
+
+`npm run test:live:tools` checks real JSON and grammar tool execution across two native compactions and a reopened session with synthetic context only. It is opt-in, not CI. The live backend and remaining limitations are recorded in `VALIDATION.md`.
 
 ### Live end-to-end test
 

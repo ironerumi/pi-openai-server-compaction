@@ -55,27 +55,27 @@ https://x.com/alexisgallagher/status/2042396986327060736?s=20 .)
 Project-local (recommended):
 
 ```bash
-pi install -l git:github.com/algal/pi-openai-server-compaction
+pi install -l git:github.com/ironerumi/pi-openai-server-compaction@v0.2.0
 ```
 
 Global:
 
 ```bash
-pi install git:github.com/algal/pi-openai-server-compaction
+pi install git:github.com/ironerumi/pi-openai-server-compaction@v0.2.0
 ```
 
 One-shot, non-persistent:
 
 ```bash
-git clone https://github.com/algal/pi-openai-server-compaction.git
+git clone https://github.com/ironerumi/pi-openai-server-compaction.git
 cd pi-openai-server-compaction && npm install
 pi -e ./src/index.ts --model openai/gpt-5.6-luna
 ```
 
 ## Requirements
 
-- Node `>= 22`
-- Pi `>=0.80.9 <0.84.0` (verified against published 0.80.9, 0.80.10, 0.81.0, 0.81.1, 0.82.0, 0.82.1, 0.83.0)
+- Node `>=22.19`
+- Pi **1.4.0** (the tested SDK target; older Pi versions are no longer supported). Host-provided Pi peers use `*` as required by Pi's package loader; this is not a claim of compatibility with every Pi version.
 - Auth/config for the model you want to use must already work in Pi
 - A supported OpenAI Responses model, e.g. `openai/gpt-5.6-sol` or `openai-codex/gpt-5.6-sol`
 
@@ -92,7 +92,9 @@ For direct `openai/*` models between compactions, the extension also:
 - Uses `previous_response_id` for live continuation when safe
 - Provides a WebSocket-backed transport path with HTTP fallback
 
-For `openai-codex/*` models, the extension preserves the built-in Codex transport and only injects reconstructed remote compaction history after compaction boundaries.
+For `openai-codex/*` models, the extension preserves the built-in Codex transport and only injects reconstructed remote compaction history after compaction boundaries. Request-local tool declarations, instructions, and reasoning configuration survive that replacement. Custom context and unanswered turns are rebuilt from the persisted branch before each request.
+
+Pi 1.4 compatibility incorporates [upstream PR #28](https://github.com/algal/pi-openai-server-compaction/pull/28), while retaining this fork's header handling, lifecycle notifications, and thinking-level invalidation fixes.
 
 ## How compaction works
 
@@ -165,11 +167,20 @@ If something goes wrong:
 
 ## Testing
 
-Smoke test (offline, verifies imports and key algorithms):
+Deterministic tests (Pi 1.4.0 typecheck, existing smoke regressions, request conversion, and local HTTP/WebSocket integration):
 
 ```bash
-npm run smoke
+npm ci --ignore-scripts
+npm test
 ```
+
+Bounded live tool acceptance (synthetic context only; two remote compactions, dynamic tool loading, and saved-session resume):
+
+```bash
+PI_OPENAI_SERVER_COMPACTION_TEST_MODEL=openai-codex/gpt-6-astra npm run test:live:tools
+```
+
+This uses existing model authentication without loading project context or global extensions. It requires real tool execution and fresh receipts, not a model claim that tools exist. The ordinary-model request ceiling is 20; compaction additionally makes one native and one portable-summary request per boundary.
 
 Live end-to-end test (requires working Pi + OpenAI auth):
 

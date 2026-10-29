@@ -31,9 +31,9 @@ import {
   callRemoteCompactionEndpoint,
   extractRemoteCompactionDetails,
   generateBestEffortLocalSummary,
-  messageToResponseItems,
   messagesToResponseItems,
   normalizeResponseItemsForPrompt,
+  branchEntryToContextMessage,
   reconstructRemoteCompactionStateFromBranch,
 } from "./remote-compaction.ts";
 import {
@@ -72,9 +72,12 @@ function getSessionId(ctx: SessionContextLike): string {
 }
 
 function getBranchMessages(branchEntries: BranchEntry[]): AgentMessage[] {
-  return branchEntries.flatMap((entry) =>
-    entry.type === "message" && entry.message ? [entry.message as AgentMessage] : [],
-  );
+  // Extension messages are `custom_message` entries, not `message` entries; reading only
+  // the latter would leave injected context out of the compaction input entirely.
+  return branchEntries.flatMap((entry) => {
+    const message = branchEntryToContextMessage(entry);
+    return message ? [message] : [];
+  });
 }
 
 function getBranchMessageCount(branchEntries: BranchEntry[]): number {
@@ -124,26 +127,6 @@ function getMatchingRemoteState(
   if (!model) return undefined;
   const remoteState = getRemoteCompactionState(sessionId);
   return remoteState && remoteState.modelKey === modelKey(model) ? remoteState : undefined;
-}
-
-function extendRemoteHistoryIfCompatible(params: {
-  sessionId: string;
-  model: TargetModel | undefined;
-  message: AgentMessage;
-}): void {
-  const remoteState = getMatchingRemoteState(params.sessionId, params.model);
-  if (!remoteState || !params.model) return;
-  if (params.message.role === "assistant" && !messageMatchesModel(params.message, params.model)) {
-    return;
-  }
-
-  const items = messageToResponseItems(params.message);
-  if (items.length === 0) return;
-
-  setRemoteCompactionState(params.sessionId, {
-    ...remoteState,
-    explicitHistory: [...remoteState.explicitHistory, ...items],
-  });
 }
 
 const COMPACTION_STATUS_KEY = "openai-compaction";
@@ -196,6 +179,14 @@ export function resolveCompactionOutcome(params: {
       },
     },
   };
+}
+
+function concreteHeaders(headers: Record<string, string | null> | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (typeof value === "string") result[name] = value;
+  }
+  return result;
 }
 
 export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
@@ -255,6 +246,13 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
     releaseAllWsSessions();
   });
 
+  // [impl->req~remote-history.persisted-context~1]
+  pi.on("context", (_event, ctx) => {
+    // Idle custom messages and boundary entries can be persisted without extension
+    // message_end events. Refresh before either transport selects replacement history.
+    syncRemoteState(ctx);
+  });
+
   pi.on("session_before_compact", async (event, ctx) => {
     const cfg = loadConfig(ctx.cwd);
     const model = ctx.model;
@@ -263,6 +261,8 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok || !auth.apiKey) return undefined;
 
+    // Pi 1.4 permits null-valued header overrides; never serialize them as "null".
+    const headers = concreteHeaders(auth.headers);
     const showStatus = cfg.notify && ctx.hasUI;
     if (showStatus) {
       ctx.ui.setStatus(COMPACTION_STATUS_KEY, "OpenAI remote compaction in progress…");
@@ -272,6 +272,7 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
       const tools = buildToolsPayload(pi.getAllTools(), pi.getActiveTools());
       const sessionId = getSessionId(ctx);
       const branchEntries = event.branchEntries as BranchEntry[];
+      syncRemoteState(ctx);
       const remoteState = getMatchingRemoteState(sessionId, model);
       const observedRequestShape = getResponsesRequestShapeState(sessionId);
       const fullBranchMessages = getBranchMessages(branchEntries);
@@ -293,7 +294,7 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
           messages: fullBranchMessages,
           model,
           apiKey: auth.apiKey,
-          headers: auth.headers,
+          headers,
           customInstructions: event.customInstructions,
           signal: event.signal,
           thinkingLevel,
@@ -303,7 +304,7 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
         callRemoteCompactionEndpoint({
           model,
           apiKey: auth.apiKey,
-          headers: auth.headers,
+          headers,
           sessionId,
           input: promptResponseItems,
           instructions: ctx.getSystemPrompt(),
@@ -334,12 +335,6 @@ export default function openaiServerCompactionExtension(pi: ExtensionAPI) {
   pi.on("message_end", (event, ctx) => {
     const sessionId = getSessionId(ctx);
     const model = ctx.model;
-
-    extendRemoteHistoryIfCompatible({
-      sessionId,
-      model,
-      message: event.message,
-    });
 
     const cfg = loadConfig(ctx.cwd);
     if (!cfg.enabled || !supportsPreviousResponseId(model, cfg)) return;
